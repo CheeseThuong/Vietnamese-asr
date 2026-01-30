@@ -204,20 +204,55 @@ def load_and_prepare_datasets(
     
     # Apply preprocessing - Không dùng num_proc (single process, không multiprocessing)
     print("\nPreprocessing datasets...")
+    
+    # Track corrupted files
+    corrupted_files = []
+    
+    def prepare_and_filter(batch, processor, corrupted_list):
+        """Wrapper để track corrupted files"""
+        try:
+            result = prepare_dataset(batch, processor)
+            # Kiểm tra nếu audio bị lỗi (input_values = zeros)
+            if result["input_values"] is not None and len(result["input_values"]) > 0:
+                # Check if it's all zeros (corrupted)
+                if not np.all(result["input_values"] == 0):
+                    return result
+                else:
+                    corrupted_list.append(batch["audio_path"])
+            else:
+                corrupted_list.append(batch["audio_path"])
+        except Exception as e:
+            corrupted_list.append(batch["audio_path"])
+            print(f"⚠️ Skipping corrupted file: {batch['audio_path']}")
+        return None
+    
+    # Process with filter
     train_dataset = train_dataset.map(
-        lambda batch: prepare_dataset(batch, processor),
+        lambda batch: prepare_and_filter(batch, processor, corrupted_files),
         remove_columns=train_dataset.column_names
     )
+    # Remove None entries (corrupted files)
+    train_dataset = train_dataset.filter(lambda x: x is not None and "input_values" in x)
     
     val_dataset = val_dataset.map(
-        lambda batch: prepare_dataset(batch, processor),
+        lambda batch: prepare_and_filter(batch, processor, corrupted_files),
         remove_columns=val_dataset.column_names
     )
+    val_dataset = val_dataset.filter(lambda x: x is not None and "input_values" in x)
     
     test_dataset = test_dataset.map(
-        lambda batch: prepare_dataset(batch, processor),
+        lambda batch: prepare_and_filter(batch, processor, corrupted_files),
         remove_columns=test_dataset.column_names
     )
+    test_dataset = test_dataset.filter(lambda x: x is not None and "input_values" in x)
+    
+    # Report corrupted files
+    if corrupted_files:
+        print(f"\n⚠️ Skipped {len(corrupted_files)} corrupted audio files")
+        print(f"Final counts:")
+        print(f"  - Train: {len(train_dataset)} samples")
+        print(f"  - Validation: {len(val_dataset)} samples")
+        print(f"  - Test: {len(test_dataset)} samples")
     
     return train_dataset, val_dataset, test_dataset
 
