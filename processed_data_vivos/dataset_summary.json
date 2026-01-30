@@ -1,0 +1,17 @@
+{
+  "dataset": "VIVOS only",
+  "train": {
+    "total": 10494,
+    "speakers": 46
+  },
+  "validation": {
+    "total": 1166,
+    "speakers": 46
+  },
+  "test": {
+    "total": 760,
+    "speakers": 19
+  },
+  "total_samples": 12420,
+  "total_speakers": 65
+}

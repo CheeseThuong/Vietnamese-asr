@@ -1,0 +1,17 @@
+# Optional dependencies - Không bắt buộc
+
+# Audio augmentation (chỉ hỗ trợ Python <=3.12)
+# audiomentations>=1.4.0
+
+# Language Model support (cải thiện độ chính xác ~20-30%)
+# pyctcdecode>=0.5.0
+# Cài KenLM riêng: pip install https://github.com/kpu/kenlm/archive/master.zip
+
+# Profiling tools - FLAMEGRAPH VISUALIZATION
+# flameprof>=0.4  # Flamegraph from cProfile (Windows-compatible!)
+# py-spy>=0.3.14  # Sampling profiler, generates flamegraph SVG
+# line_profiler>=4.0  # Line-by-line profiling
+# memory_profiler>=0.61  # Memory usage profiling
+
+# Transformer LM (optional, for advanced post-processing)
+# sentencepiece>=0.1.99

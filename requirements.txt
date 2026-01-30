@@ -1,0 +1,53 @@
+# Core dependencies
+torch>=2.0.0
+torchaudio>=2.0.0
+transformers>=4.35.0
+datasets>=2.14.0
+accelerate>=0.24.0
+
+# Audio processing
+librosa>=0.10.0
+soundfile>=0.12.0
+# audiomentations>=1.4.0  # Not compatible with Python 3.13 yet, optional package
+
+# Evaluation metrics
+jiwer>=3.0.0
+evaluate>=0.4.0
+
+# Language Model (optional - for better accuracy)
+# pyctcdecode>=0.5.0  # Install separately if needed: pip install pyctcdecode
+# kenlm  # Install from: pip install https://github.com/kpu/kenlm/archive/master.zip
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+tqdm>=4.65.0
+
+# Web application
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+aiofiles>=23.2.0
+
+# Optimization & Profiling (optional)
+# py-flamegraph>=0.1.0  # Optional profiling tool
+# pyflame>=1.0.0  # Linux only
+onnx>=1.15.0
+onnxruntime>=1.16.0
+
+# BitNet quantization (if available)
+bitsandbytes>=0.41.0
+
+# Utilities
+pyyaml>=6.0
+python-dotenv>=1.0.0
+colorlog>=6.7.0
+
+# Development
+jupyter>=1.0.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+tensorboard>=2.15.0
+
+# Model compression
+optimum>=1.14.0

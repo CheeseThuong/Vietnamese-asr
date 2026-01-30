@@ -1,0 +1,48 @@
+# Core dependencies - Bắt buộc
+torch>=2.0.0
+torchaudio>=2.0.0
+transformers>=4.35.0
+datasets>=2.14.0
+accelerate>=0.24.0
+
+# Audio processing
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# Evaluation metrics
+jiwer>=3.0.0
+evaluate>=0.4.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+tqdm>=4.65.0
+
+# Web application
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+aiofiles>=23.2.0
+
+# Model compression (optional - chủ yếu cho GPU)
+# bitsandbytes>=0.41.0  # Uncomment nếu có GPU CUDA
+
+# Utilities
+pyyaml>=6.0
+python-dotenv>=1.0.0
+colorlog>=6.7.0
+
+# Optimization
+onnx>=1.15.0
+onnxruntime>=1.16.0
+optimum>=1.14.0
+
+# Profiling tools (CPU-friendly)
+psutil>=5.9.0
+py-spy>=0.3.14
+
+# Development (optional)
+jupyter>=1.0.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+tensorboard>=2.15.0
