@@ -3,7 +3,7 @@
 
 Đề tài: **Nhận dạng tiếng nói Tiếng Việt** sử dụng Wav2Vec 2.0
 
-## 📋 Tổng quan dự án
+##  Tổng quan dự án
 
 Dự án này xây dựng hệ thống nhận dạng giọng nói tiếng Việt (ASR) sử dụng kiến trúc Wav2Vec 2.0, được fine-tune trên dữ liệu VIVOS và VinBigData. Hệ thống bao gồm:
 
@@ -12,19 +12,19 @@ Dự án này xây dựng hệ thống nhận dạng giọng nói tiếng Việt
 - Web application để upload file hoặc ghi âm trực tiếp
 - Các công cụ tối ưu hóa hiệu suất (BitNet quantization, ONNX export)
 
-## 🎯 Mục tiêu
+##  Mục tiêu
 
 - Chuyển đổi giọng nói tiếng Việt (đa vùng miền) thành văn bản
 - Đạt WER (Word Error Rate) < 10% trên test set
 - Ứng dụng web thân thiện, dễ sử dụng
 - Tối ưu hóa hiệu suất inference
 
-## 📊 Dataset
+##  Dataset
 
 - **VIVOS**: ~15 giờ ghi âm chất lượng cao
 - **VinBigData VLSP 2020**: Dataset tiếng Việt quy mô lớn
 
-## 🚀 Hướng dẫn sử dụng
+##  Hướng dẫn sử dụng
 
 ### Option 1: Training trên Google Colab (Khuyến nghị - GPU miễn phí)
 
@@ -42,7 +42,7 @@ Dự án này xây dựng hệ thống nhận dạng giọng nói tiếng Việt
    - Runtime → Change runtime type → GPU
    - Chạy từng cell
 
-   📖 **Chi tiết:** Xem [colab_setup.md](colab_setup.md)
+    **Chi tiết:** Xem [colab_setup.md](colab_setup.md)
 
 ### Option 2: Training trên máy local (CPU - mất ~6 ngày)
 
@@ -157,7 +157,7 @@ Script này sẽ:
 - Benchmark inference performance
 - Profile với PyFlame (nếu có)
 
-## 📁 Cấu trúc thư mục
+##  Cấu trúc thư mục
 
 ```
 ├── Data/                           # Raw datasets
@@ -189,7 +189,7 @@ Script này sẽ:
 └── requirements.txt               # Dependencies
 ```
 
-## 🔧 API Endpoints
+##  API Endpoints
 
 ### GET /health
 Kiểm tra trạng thái server
@@ -249,7 +249,7 @@ Thông tin về model đã load
 - Identify bottlenecks
 - Optimize critical paths
 
-## 📚 Công nghệ sử dụng
+##  Công nghệ sử dụng
 
 - **Framework**: PyTorch, Transformers (HuggingFace)
 - **Model**: Wav2Vec 2.0
@@ -258,14 +258,14 @@ Thông tin về model đã load
 - **Optimization**: bitsandbytes (BitNet), ONNX Runtime
 - **Evaluation**: jiwer (WER/CER)
 
-## 🎓 Tài liệu tham khảo
+##  Tài liệu tham khảo
 
 1. [Wav2Vec 2.0 Paper](https://arxiv.org/abs/2006.11477)
 2. [VIVOS Dataset](https://ailab.hcmus.edu.vn/vivos)
 3. [Vietnamese Pre-trained Models](https://huggingface.co/nguyenvulebinh/wav2vec2-base-vietnamese-250h)
 4. [KenLM Documentation](https://github.com/kpu/kenlm)
 
-## 🐛 Troubleshooting
+##  Troubleshooting
 
 ### Lỗi: "Model not found"
 ```bash
@@ -296,7 +296,7 @@ curl http://localhost:8000/health
 # Đảm bảo allow_origins=["*"]
 ```
 
-## 📝 TODO / Cải tiến
+##  TODO / Cải tiến
 
 - [ ] Thêm speaker diarization
 - [ ] Hỗ trợ streaming inference
@@ -306,16 +306,15 @@ curl http://localhost:8000/health
 - [ ] Fine-tune trên domain-specific data
 - [ ] A/B testing với các LM khác nhau
 
-## 👥 Đóng góp
+##  Đóng góp
 
 Sinh viên: Nguyễn Trí Thượng
-Giảng viên hướng dẫn: [Tên giảng viên]
 
-## 📄 License
+##  License
 
 Dự án này được phát triển cho mục đích học tập và nghiên cứu.
 
-## 🙏 Acknowledgments
+##  Acknowledgments
 
 - VIVOS dataset creators
 - VinBigData team
