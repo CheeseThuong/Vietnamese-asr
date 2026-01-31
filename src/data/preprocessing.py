@@ -93,6 +93,12 @@ def prepare_dataset(batch, processor):
         # Resolve path & check exists
         audio_path_obj = Path(audio_path)
         if not audio_path_obj.exists():
+            # Debug: In ra thông tin để check
+            import os
+            print(f"❌ File not found: {audio_path}")
+            print(f"   Working dir: {os.getcwd()}")
+            print(f"   Absolute path: {audio_path_obj.absolute()}")
+            print(f"   Exists: {audio_path_obj.exists()}")
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
         # Load audio với soundfile (use file object to avoid Windows unicode path issues)
@@ -119,32 +125,9 @@ def prepare_dataset(batch, processor):
         ).input_values[0]
         
     except Exception as e:
-        # Fallback: torchaudio.load (handles unicode paths better on Windows)
-        try:
-            speech_tensor, sampling_rate = torchaudio.load(str(audio_path_obj))
-            if speech_tensor.ndim > 1:
-                speech_tensor = speech_tensor.mean(dim=0)
-            speech_array = speech_tensor.numpy()
-
-            if sampling_rate != 16000:
-                resampler = torchaudio.transforms.Resample(sampling_rate, 16000)
-                speech_array = resampler(torch.FloatTensor(speech_array)).numpy()
-
-            if speech_array.dtype != np.float32:
-                speech_array = speech_array.astype(np.float32)
-
-            batch["input_values"] = processor(
-                speech_array,
-                sampling_rate=16000
-            ).input_values[0]
-        except Exception as e2:
-            print(f"Error loading audio {audio_path}: {e}")
-            print(f"Fallback failed for {audio_path}: {e2}")
-            # Return empty audio on error
-            batch["input_values"] = processor(
-                np.zeros(16000, dtype=np.float32), 
-                sampling_rate=16000
-            ).input_values[0]
+        print(f"❌ Error loading audio {audio_path}: {e}")
+        # Return None to filter out this sample
+        return None
     
     # Encode target text - Dùng tokenizer trực tiếp (không dùng as_target_processor)
     batch["labels"] = processor.tokenizer(
@@ -231,54 +214,60 @@ def load_and_prepare_datasets(
     # Apply preprocessing - Không dùng num_proc (single process, không multiprocessing)
     print("\nPreprocessing datasets...")
     
-    # Track corrupted files
-    corrupted_files = []
-    
-    def prepare_and_filter(batch, processor, corrupted_list):
-        """Wrapper để track corrupted files"""
-        try:
-            result = prepare_dataset(batch, processor)
-            # Kiểm tra nếu audio bị lỗi (input_values = zeros)
-            if result["input_values"] is not None and len(result["input_values"]) > 0:
-                # Check if it's all zeros (corrupted)
-                if not np.all(result["input_values"] == 0):
-                    return result
-                else:
-                    corrupted_list.append(batch["audio_path"])
-            else:
-                corrupted_list.append(batch["audio_path"])
-        except Exception as e:
-            corrupted_list.append(batch["audio_path"])
-            print(f"⚠️ Skipping corrupted file: {batch['audio_path']}")
-        return None
-    
-    # Process with filter
+    # Process datasets with error handling
+    print("Processing train dataset...")
+    train_orig_len = len(train_dataset)
     train_dataset = train_dataset.map(
-        lambda batch: prepare_and_filter(batch, processor, corrupted_files),
+        lambda batch: prepare_dataset(batch, processor),
         remove_columns=train_dataset.column_names
     )
-    # Remove None entries (corrupted files)
-    train_dataset = train_dataset.filter(lambda x: x is not None and "input_values" in x)
+    # Filter out None (failed samples)
+    train_dataset = train_dataset.filter(lambda x: x is not None)
+    train_skipped = train_orig_len - len(train_dataset)
     
+    print("Processing validation dataset...")
+    val_orig_len = len(val_dataset)
     val_dataset = val_dataset.map(
-        lambda batch: prepare_and_filter(batch, processor, corrupted_files),
+        lambda batch: prepare_dataset(batch, processor),
         remove_columns=val_dataset.column_names
     )
-    val_dataset = val_dataset.filter(lambda x: x is not None and "input_values" in x)
+    val_dataset = val_dataset.filter(lambda x: x is not None)
+    val_skipped = val_orig_len - len(val_dataset)
     
+    print("Processing test dataset...")
+    test_orig_len = len(test_dataset)
     test_dataset = test_dataset.map(
-        lambda batch: prepare_and_filter(batch, processor, corrupted_files),
+        lambda batch: prepare_dataset(batch, processor),
         remove_columns=test_dataset.column_names
     )
-    test_dataset = test_dataset.filter(lambda x: x is not None and "input_values" in x)
+    test_dataset = test_dataset.filter(lambda x: x is not None)
+    test_skipped = test_orig_len - len(test_dataset)
     
-    # Report corrupted files
-    if corrupted_files:
-        print(f"\n⚠️ Skipped {len(corrupted_files)} corrupted audio files")
-        print(f"Final counts:")
-        print(f"  - Train: {len(train_dataset)} samples")
-        print(f"  - Validation: {len(val_dataset)} samples")
-        print(f"  - Test: {len(test_dataset)} samples")
+    # Summary report
+    total_skipped = train_skipped + val_skipped + test_skipped
+    print("\n" + "="*60)
+    print("📊 Dataset Processing Summary")
+    print("="*60)
+    print(f"Train:      {len(train_dataset):,} samples (skipped: {train_skipped})")
+    print(f"Validation: {len(val_dataset):,} samples (skipped: {val_skipped})")
+    print(f"Test:       {len(test_dataset):,} samples (skipped: {test_skipped})")
+    print("="*60)
+    
+    if total_skipped > 0:
+        print(f"\n⚠️ Warning: {total_skipped} files were skipped due to errors")
+        print("💡 Common causes:")
+        print("   1. Audio files not found (check Cell 13 - dataset copy/symlink)")
+        print("   2. Incorrect working directory (should be /content/Vietnamese-asr)")
+        print("   3. Wrong paths in JSONL files (should be relative: Data/vivos/...)")
+    
+    if len(train_dataset) == 0:
+        print("\n❌ CRITICAL: No training samples loaded!")
+        print("🔍 Troubleshooting steps:")
+        print("   1. Check if Cell 13 completed (dataset copy/symlink)")
+        print("   2. Verify audio files exist: ls -la Data/vivos/vivos/train/waves/")
+        print("   3. Check working directory: pwd")
+        print("   4. Verify JSONL paths with Cell 12 output")
+        raise ValueError("No training data available")
     
     return train_dataset, val_dataset, test_dataset
 

@@ -128,9 +128,14 @@ def apply_bitnet_quantization(model, use_cpu=False):
             print(f"⚠ BitNet quantization failed: {e}, falling back to PyTorch quantization")
             return apply_bitnet_quantization(model, use_cpu=True)
 
-def create_model(vocab_size: int, pretrained_model: str = None):
+def create_model(vocab_size: int, processor: Wav2Vec2Processor, pretrained_model: str = None):
     """
     Tạo hoặc load pre-trained Wav2Vec2 model
+    
+    Args:
+        vocab_size: Kích thước vocabulary
+        processor: Wav2Vec2Processor instance (cần để lấy pad_token_id)
+        pretrained_model: Tên model pre-trained (optional)
     """
     if pretrained_model:
         print(f"Loading pre-trained model: {pretrained_model}")
