@@ -66,23 +66,6 @@ class DataCollatorCTCWithPadding:
 
         return batch
 
-def compute_metrics(pred):
-    """
-    Compute WER and CER metrics
-    """
-    pred_logits = pred.predictions
-    pred_ids = np.argmax(pred_logits, axis=-1)
-
-    pred.label_ids[pred.label_ids == -100] = processor.tokenizer.pad_token_id
-
-    pred_str = processor.batch_decode(pred_ids)
-    label_str = processor.batch_decode(pred.label_ids, group_tokens=False)
-
-    wer = wer_metric.compute(predictions=pred_str, references=label_str)
-    cer = cer_metric.compute(predictions=pred_str, references=label_str)
-
-    return {"wer": wer, "cer": cer}
-
 def apply_bitnet_quantization(model, use_cpu=False):
     """
     Áp dụng quantization để giảm kích thước model
@@ -185,6 +168,24 @@ def train_model(
     """
     Train Wav2Vec2 model
     """
+    # Define compute_metrics INSIDE train_model so it can access processor
+    def compute_metrics(pred):
+        """
+        Compute WER and CER metrics
+        """
+        pred_logits = pred.predictions
+        pred_ids = np.argmax(pred_logits, axis=-1)
+
+        pred.label_ids[pred.label_ids == -100] = processor.tokenizer.pad_token_id
+
+        pred_str = processor.batch_decode(pred_ids)
+        label_str = processor.batch_decode(pred.label_ids, group_tokens=False)
+
+        wer = wer_metric.compute(predictions=pred_str, references=label_str)
+        cer = cer_metric.compute(predictions=pred_str, references=label_str)
+
+        return {"wer": wer, "cer": cer}
+    
     # Data collator
     data_collator = DataCollatorCTCWithPadding(processor=processor, padding=True)
     
