@@ -90,8 +90,14 @@ def prepare_dataset(batch, processor):
     audio_path = batch["audio_path"]
     
     try:
-        # Load audio với soundfile
-        speech_array, sampling_rate = sf.read(audio_path)
+        # Resolve path & check exists
+        audio_path_obj = Path(audio_path)
+        if not audio_path_obj.exists():
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+
+        # Load audio với soundfile (use file object to avoid Windows unicode path issues)
+        with open(audio_path_obj, "rb") as f:
+            speech_array, sampling_rate = sf.read(f)
         
         # Resample nếu cần (soundfile không tự động resample)
         if sampling_rate != 16000:
@@ -113,12 +119,32 @@ def prepare_dataset(batch, processor):
         ).input_values[0]
         
     except Exception as e:
-        print(f"Error loading audio {audio_path}: {e}")
-        # Return empty audio on error
-        batch["input_values"] = processor(
-            np.zeros(16000, dtype=np.float32), 
-            sampling_rate=16000
-        ).input_values[0]
+        # Fallback: torchaudio.load (handles unicode paths better on Windows)
+        try:
+            speech_tensor, sampling_rate = torchaudio.load(str(audio_path_obj))
+            if speech_tensor.ndim > 1:
+                speech_tensor = speech_tensor.mean(dim=0)
+            speech_array = speech_tensor.numpy()
+
+            if sampling_rate != 16000:
+                resampler = torchaudio.transforms.Resample(sampling_rate, 16000)
+                speech_array = resampler(torch.FloatTensor(speech_array)).numpy()
+
+            if speech_array.dtype != np.float32:
+                speech_array = speech_array.astype(np.float32)
+
+            batch["input_values"] = processor(
+                speech_array,
+                sampling_rate=16000
+            ).input_values[0]
+        except Exception as e2:
+            print(f"Error loading audio {audio_path}: {e}")
+            print(f"Fallback failed for {audio_path}: {e2}")
+            # Return empty audio on error
+            batch["input_values"] = processor(
+                np.zeros(16000, dtype=np.float32), 
+                sampling_rate=16000
+            ).input_values[0]
     
     # Encode target text - Dùng tokenizer trực tiếp (không dùng as_target_processor)
     batch["labels"] = processor.tokenizer(
