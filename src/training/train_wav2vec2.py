@@ -215,6 +215,7 @@ def train_model(
         dataloader_pin_memory=is_gpu,  # Pin memory chỉ với GPU
         report_to=["tensorboard"],
         gradient_checkpointing=True,
+        remove_unused_columns=False,  # CRITICAL: Dataset đã được preprocess, không remove columns
     )
     
     print(f"\n✓ Training config: {'GPU' if is_gpu else 'CPU'} mode")

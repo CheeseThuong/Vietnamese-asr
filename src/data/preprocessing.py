@@ -130,13 +130,17 @@ def prepare_dataset(batch, processor):
         return None
     
     # Encode target text - Dùng tokenizer trực tiếp (không dùng as_target_processor)
-    batch["labels"] = processor.tokenizer(
+    labels = processor.tokenizer(
         batch["transcript"],
         padding=False,
         truncation=True
     ).input_ids
     
-    return batch
+    # Return ONLY required columns for model (remove old columns)
+    return {
+        "input_values": batch["input_values"],
+        "labels": labels
+    }
 
 def create_vocabulary_file(train_jsonl: str, output_file: str = "vocab.json"):
     """
