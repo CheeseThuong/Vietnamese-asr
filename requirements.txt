@@ -42,7 +42,7 @@ pyyaml>=6.0
 python-dotenv>=1.0.0
 
 # Speaker Diarization
-simple-diarizer>=0.1.0
+simple-diarizer>=0.0.13
 resemblyzer>=0.1.3
 scikit-learn>=1.3.0
 
