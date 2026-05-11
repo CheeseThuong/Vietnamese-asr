@@ -35,12 +35,16 @@ import torch
 import torchaudio
 import librosa
 import numpy as np
-import os
 import tempfile
 import json
 import platform
 import traceback
 import random
+
+# FIX: Optimize for low-memory environments (Render Free Tier)
+if os.environ.get('RENDER'):
+    torch.set_num_threads(1)
+
 from transformers import (
     Wav2Vec2ForCTC,
     Wav2Vec2Processor,
@@ -458,9 +462,10 @@ def load_model():
                     break
 
         # Try multiple fallback models if neither the configured source nor the local model is available
+        # FIX: Put 'base' model first for Render to avoid OOM (512MB RAM limit)
         fallback_models = [
-            "nguyenvulebinh/wav2vec2-large-vi-vlsp2020",  # Vietnamese - large
-            "nguyenvulebinh/wav2vec2-base-vi",             # Vietnamese - base
+            "nguyenvulebinh/wav2vec2-base-vi",             # Vietnamese - base (Lightweight ~300MB)
+            "nguyenvulebinh/wav2vec2-large-vi-vlsp2020",  # Vietnamese - large (~1.2GB)
             "facebook/wav2vec2-base-960h"                  # English fallback
         ]
 

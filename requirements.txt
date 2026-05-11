@@ -3,11 +3,12 @@
 # ============================================
 
 # Core ML
-torch>=2.0.0
-torchaudio>=2.0.0
+--index-url https://download.pytorch.org/whl/cpu
+torch
+torchaudio
 transformers>=4.35.0
 datasets>=4.8.3
-pyarrow>=23.0.1
+pyarrow>=14.0.1
 accelerate>=0.24.0
 
 # Audio processing
