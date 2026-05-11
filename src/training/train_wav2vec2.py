@@ -4,6 +4,7 @@ Training script cho Wav2Vec2 ASR với BitNet quantization
 import os
 import torch
 import json
+from typing import Optional
 from dataclasses import dataclass
 from typing import Dict, List, Union
 from pathlib import Path
@@ -15,14 +16,41 @@ from transformers import (
     Trainer,
     EarlyStoppingCallback
 )
-from datasets import load_from_disk, DatasetDict
 import numpy as np
-from src.data.preprocessing import load_and_prepare_datasets, create_processor
+from src.data.preprocessing import load_and_prepare_datasets, load_and_prepare_hf_datasets, create_processor
 import evaluate
 
 # Load WER and CER metrics
 wer_metric = evaluate.load("wer")
 cer_metric = evaluate.load("cer")
+
+def get_latest_checkpoint(output_dir: str):
+    """Return latest checkpoint path in output_dir, or None if not found."""
+    if not os.path.isdir(output_dir):
+        return None
+    checkpoints = []
+    for name in os.listdir(output_dir):
+        if name.startswith("checkpoint-"):
+            path = os.path.join(output_dir, name)
+            if os.path.isdir(path):
+                try:
+                    step = int(name.replace("checkpoint-", ""))
+                except ValueError:
+                    step = -1
+                checkpoints.append((step, path))
+    if not checkpoints:
+        return None
+    checkpoints.sort(key=lambda x: x[0])
+    return checkpoints[-1][1]
+
+
+def get_hf_dataset_source() -> Optional[str]:
+    """Return a configured Hugging Face dataset source if one is set."""
+    for env_name in ("HF_DATASET_SOURCE", "HF_DATASET_URL", "HF_DATASET_ID"):
+        value = os.getenv(env_name)
+        if value:
+            return value.strip()
+    return None
 
 @dataclass
 class DataCollatorCTCWithPadding:
@@ -163,7 +191,8 @@ def train_model(
     gradient_accumulation_steps: int = 2,
     learning_rate: float = 3e-4,
     warmup_steps: int = 500,
-    use_fp16: bool = True
+    use_fp16: bool = True,
+    resume_from_checkpoint: str = None
 ):
     """
     Train Wav2Vec2 model
@@ -246,7 +275,9 @@ def train_model(
     print("Starting training...")
     print("="*50)
     
-    trainer.train()
+    if resume_from_checkpoint:
+        print(f"\n↩ Resuming from checkpoint: {resume_from_checkpoint}")
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     
     # Save final model
     trainer.save_model(f"{output_dir}/final_model")
@@ -262,10 +293,20 @@ def main():
     """
     # Paths - từ root của project
     project_root = Path(__file__).parent.parent.parent
+    hf_raw_dir = project_root / 'Data' / 'train'
     data_dir = project_root / 'processed_data_vivos'
     output_dir = project_root / 'models' / 'wav2vec2-vietnamese-asr'
     vocab_path = project_root / 'vocab.json'
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    remote_hf_source = get_hf_dataset_source()
+
+    local_hf_dataset_ready = (hf_raw_dir / 'dataset_dict.json').exists()
+
+    # If a remote HF dataset is configured, use it directly as well.
+    if remote_hf_source:
+        print(f"\nDetected remote Hugging Face dataset source: {remote_hf_source}")
+        print("Will load it directly after the processor is ready.")
     
     # Configuration
     config = {
@@ -281,6 +322,15 @@ def main():
     # Save config
     with open(output_dir / 'training_config.json', 'w') as f:
         json.dump(config, f, indent=2)
+
+    # Resume training (auto-detect latest checkpoint)
+    resume_env = os.getenv("RESUME_FROM_CHECKPOINT", "auto").strip()
+    if resume_env.lower() == "none":
+        resume_from_checkpoint = None
+    elif resume_env.lower() == "auto":
+        resume_from_checkpoint = get_latest_checkpoint(str(output_dir))
+    else:
+        resume_from_checkpoint = resume_env
     
     # Load processor
     global processor
@@ -289,28 +339,46 @@ def main():
         processor = Wav2Vec2Processor.from_pretrained(config['pretrained_model'])
     else:
         processor = create_processor(str(vocab_path))
+
+    # Resolve dataset source after the processor exists.
+    train_dataset = val_dataset = test_dataset = None
+    token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
+    if remote_hf_source:
+        print(f"\nLoading remote Hugging Face dataset directly: {remote_hf_source}")
+        train_dataset, val_dataset, test_dataset = load_and_prepare_hf_datasets(
+            remote_hf_source,
+            processor,
+            token=token,
+        )
+    elif local_hf_dataset_ready:
+        print(f"\nLoading local Hugging Face DatasetDict directly: {hf_raw_dir}")
+        train_dataset, val_dataset, test_dataset = load_and_prepare_hf_datasets(
+            str(hf_raw_dir),
+            processor,
+            token=token,
+        )
     
-    # Kiểm tra dataset files
-    required_files = ['train.jsonl', 'validation.jsonl', 'test.jsonl']
-    missing_files = [f for f in required_files if not (data_dir / f).exists()]
-    
-    if missing_files:
-        print(f"\n❌ Lỗi: Không tìm thấy dataset files: {missing_files}")
-        print(f"📁 Đường dẫn tìm kiếm: {data_dir}")
-        print(f"\n💡 Giải pháp:")
-        print(f"   1. Chạy lệnh: python prepare_vivos.py")
-        print(f"   2. Hoặc: python prepare_full_dataset.py (để gộp VIVOS + VinBigData)")
-        print(f"   3. Sau đó chạy lại: python train.py")
-        return
-    
-    # Load and prepare datasets
-    print("\nLoading datasets...")
-    train_dataset, val_dataset, test_dataset = load_and_prepare_datasets(
-        str(data_dir / 'train.jsonl'),
-        str(data_dir / 'validation.jsonl'),
-        str(data_dir / 'test.jsonl'),
-        processor
-    )
+    if train_dataset is None or val_dataset is None or test_dataset is None:
+        # Fallback to legacy JSONL pipeline.
+        required_files = ['train.jsonl', 'validation.jsonl', 'test.jsonl']
+        missing_files = [f for f in required_files if not (data_dir / f).exists()]
+
+        if missing_files:
+            print(f"\n❌ Lỗi: Không tìm thấy dataset files: {missing_files}")
+            print(f"📁 Đường dẫn tìm kiếm: {data_dir}")
+            print(f"\n💡 Giải pháp:")
+            print(f"   1. Chạy lệnh: python prepare_vivos.py")
+            print(f"   2. Hoặc: python prepare_full_dataset.py (để gộp VIVOS + VinBigData)")
+            print(f"   3. Sau đó chạy lại: python train.py")
+            return
+
+        print("\nLoading datasets from JSONL fallback...")
+        train_dataset, val_dataset, test_dataset = load_and_prepare_datasets(
+            str(data_dir / 'train.jsonl'),
+            str(data_dir / 'validation.jsonl'),
+            str(data_dir / 'test.jsonl'),
+            processor
+        )
     
     # Create model
     print("\nCreating model...")
@@ -343,7 +411,8 @@ def main():
         batch_size=config['batch_size'],
         gradient_accumulation_steps=config['gradient_accumulation_steps'],
         learning_rate=config['learning_rate'],
-        use_fp16=config['use_fp16']
+        use_fp16=config['use_fp16'],
+        resume_from_checkpoint=resume_from_checkpoint
     )
     
     # Evaluate on test set

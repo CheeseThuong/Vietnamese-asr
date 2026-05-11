@@ -4,9 +4,170 @@ Script để gộp và xử lý dữ liệu VIVOS và VinBigData cho ASR tiếng
 import os
 import json
 import shutil
+import random
+import re
 from pathlib import Path
 from tqdm import tqdm
-import pandas as pd
+from datasets import load_dataset
+
+
+HF_DATASET_DEFAULT_SOURCE = "https://huggingface.co/datasets/linhtran92/viet_bud500/tree/main/data"
+
+
+def normalize_hf_dataset_source(source):
+    """Convert a Hugging Face dataset URL to a dataset repo id."""
+    if not source:
+        return None
+
+    source = source.strip()
+    if not source:
+        return None
+
+    match = re.search(r"huggingface\.co/datasets/([^/?#]+/[^/?#]+)", source)
+    if match:
+        return match.group(1)
+
+    return source
+
+
+def load_hf_dataset_split(dataset_source, split_name="train", data_dir="data", token=None):
+    """Load a split from a gated Hugging Face dataset repo."""
+    repo_id = normalize_hf_dataset_source(dataset_source)
+    if not repo_id:
+        raise ValueError("dataset_source is empty")
+
+    load_kwargs = {
+        "data_dir": data_dir,
+        "split": split_name,
+    }
+    if token:
+        load_kwargs["token"] = token
+
+    print(f"Loading Hugging Face dataset: {repo_id} [{split_name}]...")
+    return load_dataset(repo_id, **load_kwargs)
+
+
+def process_hf_parquet_data(parquet_path, output_dir):
+    """
+    Xử lý dữ liệu Parquet từ Hugging Face dataset export.
+
+    Schema hỗ trợ:
+    - audio.bytes: bytes audio nhúng trong parquet
+    - audio.path: tên file gốc
+    - transcription: transcript tiếng Việt
+    """
+    from pyarrow import parquet as pq
+
+    print("Processing Hugging Face Parquet dataset...")
+    parquet_path = Path(parquet_path)
+    output_dir = Path(output_dir)
+    audio_output_dir = output_dir / "audio"
+    audio_output_dir.mkdir(parents=True, exist_ok=True)
+
+    parquet_files = sorted(parquet_path.glob("*.parquet"))
+    if not parquet_files:
+        print(f"Warning: no parquet files found in {parquet_path}")
+        return []
+
+    data = []
+    seen_paths = set()
+
+    for parquet_file in parquet_files:
+        print(f"Reading {parquet_file.name}...")
+        table = pq.read_table(parquet_file, columns=["audio", "transcription"])
+        for row in table.to_pylist():
+            audio = row.get("audio") or {}
+            transcript = (row.get("transcription") or "").strip()
+            if not transcript:
+                continue
+
+            source_name = audio.get("path") or "unknown.wav"
+            audio_bytes = audio.get("bytes")
+            target_name = Path(source_name).name
+            target_audio_path = audio_output_dir / target_name
+
+            if target_audio_path.as_posix() in seen_paths:
+                # Avoid duplicate filenames across parquet shards.
+                stem = target_audio_path.stem
+                suffix = target_audio_path.suffix or ".wav"
+                counter = 1
+                while True:
+                    candidate = audio_output_dir / f"{stem}_{counter}{suffix}"
+                    if candidate.as_posix() not in seen_paths:
+                        target_audio_path = candidate
+                        break
+                    counter += 1
+
+            if audio_bytes:
+                target_audio_path.write_bytes(audio_bytes)
+                seen_paths.add(target_audio_path.as_posix())
+            else:
+                if Path(source_name).exists():
+                    target_audio_path = Path(source_name).resolve()
+                else:
+                    continue
+
+            data.append({
+                "audio_path": str(target_audio_path),
+                "transcript": transcript,
+                "speaker_id": "unknown",
+                "dataset": "hf_parquet"
+            })
+
+    print(f"Hugging Face Parquet: Found {len(data)} samples")
+    return data
+
+
+def process_hf_dataset_repo(dataset_source, output_dir, split_name="train", token=None):
+    """Load a gated Hugging Face dataset repo directly and convert it to our JSONL format."""
+    output_dir = Path(output_dir)
+    audio_output_dir = output_dir / "audio"
+    audio_output_dir.mkdir(parents=True, exist_ok=True)
+
+    dataset = load_hf_dataset_split(dataset_source, split_name=split_name, data_dir="data", token=token)
+    data = []
+    seen_paths = set()
+
+    for row in dataset:
+        audio = row.get("audio") or {}
+        transcript = (row.get("transcription") or row.get("text") or "").strip()
+        if not transcript:
+            continue
+
+        source_name = audio.get("path") or "unknown.wav"
+        audio_bytes = audio.get("bytes")
+        target_name = Path(source_name).name
+        target_audio_path = audio_output_dir / target_name
+
+        if target_audio_path.as_posix() in seen_paths:
+            stem = target_audio_path.stem
+            suffix = target_audio_path.suffix or ".wav"
+            counter = 1
+            while True:
+                candidate = audio_output_dir / f"{stem}_{counter}{suffix}"
+                if candidate.as_posix() not in seen_paths:
+                    target_audio_path = candidate
+                    break
+                counter += 1
+
+        if audio_bytes:
+            target_audio_path.write_bytes(audio_bytes)
+            seen_paths.add(target_audio_path.as_posix())
+        else:
+            if Path(source_name).exists():
+                target_audio_path = Path(source_name).resolve()
+            else:
+                continue
+
+        data.append({
+            "audio_path": str(target_audio_path),
+            "transcript": transcript,
+            "speaker_id": row.get("speaker_id", "unknown"),
+            "dataset": "hf_remote"
+        })
+
+    print(f"Hugging Face repo split '{split_name}': Found {len(data)} samples")
+    return data
 
 def process_vivos_data(vivos_path, output_dir):
     """
@@ -144,25 +305,46 @@ def save_dataset(data, output_file):
             json.dump(item, f, ensure_ascii=False)
             f.write('\n')
 
+
+def split_hf_data(data, train_ratio=0.9, val_ratio=0.05):
+    """Split Parquet dataset into train/validation/test."""
+    random.seed(42)
+    shuffled = data[:]
+    random.shuffle(shuffled)
+
+    total = len(shuffled)
+    train_end = int(total * train_ratio)
+    val_end = train_end + int(total * val_ratio)
+
+    train_data = shuffled[:train_end]
+    val_data = shuffled[train_end:val_end]
+    test_data = shuffled[val_end:]
+
+    return train_data, val_data, test_data
+
 def create_dataset_summary(train_data, val_data, test_data, output_dir):
     """
     Tạo file summary thống kê dataset
     """
+    def count_by_dataset(rows):
+        counts = {}
+        for row in rows:
+            dataset_name = row.get('dataset', 'unknown')
+            counts[dataset_name] = counts.get(dataset_name, 0) + 1
+        return counts
+
     summary = {
         'train': {
             'total': len(train_data),
-            'vivos': len([d for d in train_data if d['dataset'] == 'vivos']),
-            'vinbigdata': len([d for d in train_data if d['dataset'] == 'vinbigdata'])
+            'by_dataset': count_by_dataset(train_data)
         },
         'validation': {
             'total': len(val_data),
-            'vivos': len([d for d in val_data if d['dataset'] == 'vivos']),
-            'vinbigdata': len([d for d in val_data if d['dataset'] == 'vinbigdata'])
+            'by_dataset': count_by_dataset(val_data)
         },
         'test': {
             'total': len(test_data),
-            'vivos': len([d for d in test_data if d['dataset'] == 'vivos']),
-            'vinbigdata': len([d for d in test_data if d['dataset'] == 'vinbigdata'])
+            'by_dataset': count_by_dataset(test_data)
         }
     }
     
@@ -173,17 +355,52 @@ def create_dataset_summary(train_data, val_data, test_data, output_dir):
     print("DATASET SUMMARY")
     print("="*50)
     print(f"Train: {summary['train']['total']} samples")
-    print(f"  - VIVOS: {summary['train']['vivos']}")
-    print(f"  - VinBigData: {summary['train']['vinbigdata']}")
+    for name, count in summary['train']['by_dataset'].items():
+        print(f"  - {name}: {count}")
     print(f"\nValidation: {summary['validation']['total']} samples")
-    print(f"  - VIVOS: {summary['validation']['vivos']}")
-    print(f"  - VinBigData: {summary['validation']['vinbigdata']}")
+    for name, count in summary['validation']['by_dataset'].items():
+        print(f"  - {name}: {count}")
     print(f"\nTest: {summary['test']['total']} samples")
-    print(f"  - VIVOS: {summary['test']['vivos']}")
-    print(f"  - VinBigData: {summary['test']['vinbigdata']}")
+    for name, count in summary['test']['by_dataset'].items():
+        print(f"  - {name}: {count}")
     print("="*50)
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Prepare ASR datasets")
+    parser.add_argument(
+        "--hf_train_path",
+        type=str,
+        default=None,
+        help="Path to Hugging Face parquet train folder (contains *.parquet files)"
+    )
+    parser.add_argument(
+        "--hf_output_dir",
+        type=str,
+        default="processed_data_hf",
+        help="Output directory for Hugging Face parquet dataset"
+    )
+    parser.add_argument(
+        "--skip_vivos_vinbig",
+        action="store_true",
+        help="Only prepare Hugging Face parquet data"
+    )
+    parser.add_argument(
+        "--hf_dataset_source",
+        type=str,
+        default=os.getenv("HF_DATASET_SOURCE", HF_DATASET_DEFAULT_SOURCE),
+        help="Hugging Face dataset URL or repo id (default: linhtran92/viet_bud500 data folder)"
+    )
+    parser.add_argument(
+        "--hf_dataset_split",
+        type=str,
+        default="train",
+        help="Split name to load from the remote Hugging Face dataset"
+    )
+
+    args = parser.parse_args()
+
     # Đường dẫn
     base_dir = Path(__file__).parent
     vivos_path = base_dir / 'Data' / 'vivos' / 'vivos'
@@ -192,6 +409,66 @@ def main():
     
     # Tạo thư mục output
     output_dir.mkdir(exist_ok=True)
+
+    if args.hf_train_path:
+        hf_output_dir = Path(args.hf_output_dir)
+        hf_output_dir.mkdir(parents=True, exist_ok=True)
+
+        hf_data = process_hf_parquet_data(args.hf_train_path, hf_output_dir)
+        if not hf_data:
+            print("Error: No Hugging Face parquet data found!")
+            return
+
+        train_data, val_data, test_data = split_hf_data(hf_data)
+
+        print("\nSaving Hugging Face parquet datasets...")
+        save_dataset(train_data, hf_output_dir / 'train.jsonl')
+        save_dataset(val_data, hf_output_dir / 'validation.jsonl')
+        save_dataset(test_data, hf_output_dir / 'test.jsonl')
+        create_dataset_summary(train_data, val_data, test_data, hf_output_dir)
+
+        print(f"\nHugging Face datasets saved to: {hf_output_dir}")
+        print("Files created:")
+        print("  - train.jsonl")
+        print("  - validation.jsonl")
+        print("  - test.jsonl")
+        print("  - dataset_summary.json")
+
+        if args.skip_vivos_vinbig:
+            return
+
+    if args.hf_dataset_source:
+        hf_output_dir = Path(args.hf_output_dir)
+        hf_output_dir.mkdir(parents=True, exist_ok=True)
+        token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
+
+        try:
+            hf_data = process_hf_dataset_repo(
+                args.hf_dataset_source,
+                hf_output_dir,
+                split_name=args.hf_dataset_split,
+                token=token,
+            )
+        except Exception as e:
+            print(f"Error loading remote Hugging Face dataset: {e}")
+            print("Hint: the dataset is gated. Log in to Hugging Face and accept the access conditions first.")
+            return
+
+        if not hf_data:
+            print("Error: No samples were loaded from the remote Hugging Face dataset!")
+            return
+
+        train_data, val_data, test_data = split_hf_data(hf_data)
+        print("\nSaving remote Hugging Face datasets...")
+        save_dataset(train_data, hf_output_dir / 'train.jsonl')
+        save_dataset(val_data, hf_output_dir / 'validation.jsonl')
+        save_dataset(test_data, hf_output_dir / 'test.jsonl')
+        create_dataset_summary(train_data, val_data, test_data, hf_output_dir)
+        print(f"\nRemote Hugging Face datasets saved to: {hf_output_dir}")
+        print("Run training using the generated JSONL files or set the output directory as your data source.")
+
+        if args.skip_vivos_vinbig:
+            return
     
     # Xử lý VIVOS
     vivos_data = process_vivos_data(vivos_path, output_dir)

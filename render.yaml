@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: vietasr-backend
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT app.app:app
+    envVars:
+      - key: HUGGINGFACE_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ASR_MODEL_SOURCE
+        value: huggingface

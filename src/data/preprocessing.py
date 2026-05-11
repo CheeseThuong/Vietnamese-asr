@@ -1,9 +1,11 @@
 """
 Data preprocessing pipeline cho Wav2Vec2 ASR
 """
+import os
 import torch
 import torchaudio
-from datasets import Dataset
+from io import BytesIO
+from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
 import json
 from pathlib import Path
 from transformers import Wav2Vec2Processor, Wav2Vec2CTCTokenizer, Wav2Vec2FeatureExtractor
@@ -11,6 +13,22 @@ import re
 from typing import Dict, List
 import soundfile as sf
 import numpy as np
+
+
+def normalize_hf_dataset_source(source):
+    """Convert a Hugging Face dataset URL to a dataset repo id."""
+    if not source:
+        return None
+
+    source = source.strip()
+    if not source:
+        return None
+
+    match = re.search(r"huggingface\.co/datasets/([^/?#]+/[^/?#]+)", source)
+    if match:
+        return match.group(1)
+
+    return source
 
 class VietnameseASRDataset:
     """
@@ -29,26 +47,7 @@ class VietnameseASRDataset:
         return data
     
     def normalize_text(self, text: str) -> str:
-        """
-        Chuẩn hóa văn bản tiếng Việt
-        - Chuyển về chữ thường
-        - Loại bỏ dấu câu không cần thiết
-        - Chuẩn hóa khoảng trắng
-        """
-        # Chuyển về chữ thường
-        text = text.lower()
-        
-        # Loại bỏ các ký tự đặc biệt, giữ lại chữ cái tiếng Việt và số
-        # Giữ lại khoảng trắng
-        text = re.sub(r'[^\w\sàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]', ' ', text)
-        
-        # Loại bỏ <unk> và các token đặc biệt khác
-        text = re.sub(r'<unk>|<s>|</s>|<pad>', ' ', text)
-        
-        # Chuẩn hóa khoảng trắng
-        text = re.sub(r'\s+', ' ', text).strip()
-        
-        return text
+        return normalize_text(text)
     
     def create_vocab(self, texts: List[str]) -> Dict[str, int]:
         """
@@ -86,61 +85,207 @@ def prepare_dataset(batch, processor):
     """
     Hàm preprocessing cho batch data
     """
-    # Load audio file thủ công bằng soundfile
     audio_path = batch["audio_path"]
     
     try:
-        # Resolve path & check exists
-        audio_path_obj = Path(audio_path)
-        if not audio_path_obj.exists():
-            # Debug: In ra thông tin để check
-            import os
+        # Check file exists BEFORE attempting to load
+        if not os.path.exists(audio_path):
+            abs_path = os.path.abspath(audio_path)
             print(f"❌ File not found: {audio_path}")
             print(f"   Working dir: {os.getcwd()}")
-            print(f"   Absolute path: {audio_path_obj.absolute()}")
-            print(f"   Exists: {audio_path_obj.exists()}")
-            raise FileNotFoundError(f"Audio file not found: {audio_path}")
-
-        # Load audio với soundfile (use file object to avoid Windows unicode path issues)
-        with open(audio_path_obj, "rb") as f:
-            speech_array, sampling_rate = sf.read(f)
+            print(f"   Absolute path: {abs_path}")
+            print(f"   Exists: {os.path.exists(abs_path)}")
+            return None  # Return None to filter out this sample
         
-        # Resample nếu cần (soundfile không tự động resample)
+        # Load audio file
+        speech_array, sampling_rate = sf.read(audio_path)
+        
+        # Convert to mono if stereo
+        if len(speech_array.shape) > 1:
+            speech_array = speech_array.mean(axis=1)
+        
+        # Resample if needed
         if sampling_rate != 16000:
-            # Dùng torchaudio để resample
             speech_tensor = torch.FloatTensor(speech_array)
-            if len(speech_tensor.shape) > 1:  # Stereo to mono
-                speech_tensor = speech_tensor.mean(dim=1)
             resampler = torchaudio.transforms.Resample(sampling_rate, 16000)
             speech_array = resampler(speech_tensor).numpy()
         
-        # Convert to float32 nếu cần
+        # Convert to float32 if needed
         if speech_array.dtype != np.float32:
             speech_array = speech_array.astype(np.float32)
         
-        # Compute input values (mel spectrogram features)
-        batch["input_values"] = processor(
+        # Process audio to input values
+        input_values = processor(
             speech_array, 
             sampling_rate=16000
         ).input_values[0]
         
+        # Encode target text
+        labels = processor.tokenizer(
+            normalize_text(batch["transcript"]),
+            padding=False,
+            truncation=True
+        ).input_ids
+        
+        # Return ONLY required columns
+        return {
+            "input_values": input_values,
+            "labels": labels
+        }
+        
     except Exception as e:
         print(f"❌ Error loading audio {audio_path}: {e}")
-        # Return None to filter out this sample
+        return None  # Return None to filter out this sample
+
+
+def normalize_text(text: str) -> str:
+    """Chuẩn hóa văn bản tiếng Việt."""
+    text = (text or "").lower()
+    text = re.sub(r'[^\w\sàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]', ' ', text)
+    text = re.sub(r'<unk>|<s>|</s>|<pad>', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def load_hf_dataset_source(dataset_source, data_dir="data", token=None):
+    """Load a local saved DatasetDict or a remote Hugging Face dataset repo."""
+    dataset_path = Path(dataset_source)
+    if dataset_path.exists():
+        loaded_dataset = load_from_disk(str(dataset_path))
+        if isinstance(loaded_dataset, DatasetDict):
+            return loaded_dataset
+        return DatasetDict({"train": loaded_dataset})
+
+    repo_id = normalize_hf_dataset_source(dataset_source)
+    if not repo_id:
+        raise ValueError("dataset_source is empty")
+
+    load_kwargs = {"data_dir": data_dir}
+    if token:
+        load_kwargs["token"] = token
+
+    print(f"Loading Hugging Face dataset source: {repo_id}...")
+    loaded_dataset = load_dataset(repo_id, **load_kwargs)
+    if isinstance(loaded_dataset, DatasetDict):
+        return loaded_dataset
+    return DatasetDict({"train": loaded_dataset})
+
+
+def _load_audio_from_sample(audio_sample):
+    """Load audio samples from bytes or a local file path."""
+    if not audio_sample:
+        return None, None
+
+    audio_bytes = audio_sample.get("bytes")
+    audio_path = audio_sample.get("path")
+
+    if audio_bytes:
+        return sf.read(BytesIO(audio_bytes))
+
+    if audio_path and Path(audio_path).exists():
+        return sf.read(audio_path)
+
+    return None, None
+
+
+def prepare_hf_audio_sample(batch, processor):
+    """Convert a Hugging Face audio row into input_values + labels."""
+    try:
+        audio = batch.get("audio") or {}
+        transcript = normalize_text(batch.get("transcription") or batch.get("text") or "")
+        if not transcript:
+            return None
+
+        speech_array, sampling_rate = _load_audio_from_sample(audio)
+        if speech_array is None or sampling_rate is None:
+            return None
+
+        if len(speech_array.shape) > 1:
+            speech_array = speech_array.mean(axis=1)
+
+        if sampling_rate != 16000:
+            speech_tensor = torch.FloatTensor(speech_array)
+            resampler = torchaudio.transforms.Resample(sampling_rate, 16000)
+            speech_array = resampler(speech_tensor).numpy()
+
+        if speech_array.dtype != np.float32:
+            speech_array = speech_array.astype(np.float32)
+
+        input_values = processor(
+            speech_array,
+            sampling_rate=16000
+        ).input_values[0]
+
+        labels = processor.tokenizer(
+            transcript,
+            padding=False,
+            truncation=True
+        ).input_ids
+
+        return {
+            "input_values": input_values,
+            "labels": labels
+        }
+    except Exception as e:
+        print(f"❌ Error processing HF audio sample: {e}")
         return None
-    
-    # Encode target text - Dùng tokenizer trực tiếp (không dùng as_target_processor)
-    labels = processor.tokenizer(
-        batch["transcript"],
-        padding=False,
-        truncation=True
-    ).input_ids
-    
-    # Return ONLY required columns for model (remove old columns)
-    return {
-        "input_values": batch["input_values"],
-        "labels": labels
-    }
+
+
+def _prepare_dataset_split(dataset_split, processor, split_name: str):
+    """Map and filter one Dataset split."""
+    original_length = len(dataset_split)
+    prepared_split = dataset_split.map(
+        lambda batch: prepare_hf_audio_sample(batch, processor),
+        remove_columns=dataset_split.column_names
+    )
+    prepared_split = prepared_split.filter(lambda x: x.get("input_values") is not None)
+    skipped = original_length - len(prepared_split)
+    print(f"{split_name.capitalize()}: {len(prepared_split)} samples (skipped: {skipped})")
+    return prepared_split
+
+
+def load_and_prepare_hf_datasets(
+    dataset_source: str,
+    processor: Wav2Vec2Processor,
+    data_dir: str = "data",
+    token: str = None,
+):
+    """Load and preprocess a local saved DatasetDict or a remote HF dataset."""
+    raw_dataset = load_hf_dataset_source(dataset_source, data_dir=data_dir, token=token)
+
+    if "train" in raw_dataset and ("validation" not in raw_dataset or "test" not in raw_dataset):
+        if "validation" not in raw_dataset and "test" not in raw_dataset:
+            split_once = raw_dataset["train"].train_test_split(test_size=0.1, seed=42)
+            split_twice = split_once["test"].train_test_split(test_size=0.5, seed=42)
+            raw_dataset = DatasetDict({
+                "train": split_once["train"],
+                "validation": split_twice["train"],
+                "test": split_twice["test"],
+            })
+        elif "validation" not in raw_dataset:
+            split_once = raw_dataset["train"].train_test_split(test_size=0.1, seed=42)
+            raw_dataset = DatasetDict({
+                "train": split_once["train"],
+                "validation": split_once["test"],
+                "test": raw_dataset["test"],
+            })
+        elif "test" not in raw_dataset:
+            split_once = raw_dataset["train"].train_test_split(test_size=0.1, seed=42)
+            raw_dataset = DatasetDict({
+                "train": split_once["train"],
+                "validation": raw_dataset["validation"],
+                "test": split_once["test"],
+            })
+
+    train_dataset = _prepare_dataset_split(raw_dataset["train"], processor, "train")
+    val_dataset = _prepare_dataset_split(raw_dataset["validation"], processor, "validation")
+    test_dataset = _prepare_dataset_split(raw_dataset["test"], processor, "test")
+
+    print("\n" + "="*60)
+    print("Dataset processing completed")
+    print("="*60)
+
+    return train_dataset, val_dataset, test_dataset
 
 def create_vocabulary_file(train_jsonl: str, output_file: str = "vocab.json"):
     """
@@ -225,8 +370,8 @@ def load_and_prepare_datasets(
         lambda batch: prepare_dataset(batch, processor),
         remove_columns=train_dataset.column_names
     )
-    # Filter out None (failed samples)
-    train_dataset = train_dataset.filter(lambda x: x is not None)
+    # Filter out None/invalid samples (check for input_values presence)
+    train_dataset = train_dataset.filter(lambda x: x.get('input_values') is not None)
     train_skipped = train_orig_len - len(train_dataset)
     
     print("Processing validation dataset...")
@@ -235,7 +380,7 @@ def load_and_prepare_datasets(
         lambda batch: prepare_dataset(batch, processor),
         remove_columns=val_dataset.column_names
     )
-    val_dataset = val_dataset.filter(lambda x: x is not None)
+    val_dataset = val_dataset.filter(lambda x: x.get('input_values') is not None)
     val_skipped = val_orig_len - len(val_dataset)
     
     print("Processing test dataset...")
@@ -244,7 +389,7 @@ def load_and_prepare_datasets(
         lambda batch: prepare_dataset(batch, processor),
         remove_columns=test_dataset.column_names
     )
-    test_dataset = test_dataset.filter(lambda x: x is not None)
+    test_dataset = test_dataset.filter(lambda x: x.get('input_values') is not None)
     test_skipped = test_orig_len - len(test_dataset)
     
     # Summary report

@@ -1,148 +1,57 @@
-# Vietnamese ASR Project Structure
+# Project Structure — VietASR Pro
+
+> Tài liệu mô tả cấu trúc thư mục sau khi tổ chức lại (reorganized).  
+> Document describing the directory structure after reorganization.
+
+## Tổng quan / Overview
 
 ```
-vietnamese-asr/
+VietASR-Pro/
+├── README.md                 # Tài liệu chính (song ngữ VI/EN)
+├── PAPER_VietASR_Pro.md      # Bài báo khoa học (tiếng Việt)
+├── LICENSE                   # Giấy phép
+├── requirements.txt          # Dependencies (hợp nhất)
+├── .gitignore                # Git ignore rules
 │
-├── src/                          # Source code chính
-│   ├── __init__.py
-│   │
-│   ├── data/                     # Data processing
-│   │   ├── __init__.py
-│   │   ├── prepare_dataset.py   # Gộp VIVOS + VinBigData
-│   │   ├── prepare_vivos_only.py # Chỉ VIVOS
-│   │   ├── preprocessing.py     # Preprocessing pipeline
-│   │   └── normalize_audio.py   # Audio normalization
-│   │
-│   ├── models/                   # Model definitions (reserved)
-│   │   └── __init__.py
-│   │
-│   ├── training/                 # Training scripts
-│   │   ├── __init__.py
-│   │   ├── train_wav2vec2.py    # Training pipeline
-│   │   └── language_model.py    # Language model
-│   │
-│   ├── evaluation/               # Evaluation scripts
-│   │   ├── __init__.py
-│   │   └── evaluate.py          # WER/CER evaluation
-│   │
-│   ├── api/                      # API server
-│   │   ├── __init__.py
-│   │   └── server.py            # FastAPI backend
-│   │
-│   └── utils/                    # Utilities
-│       ├── __init__.py
-│       ├── optimization.py      # Model optimization
-│       ├── profiling.py         # Profiling tools
-│       └── demo.py              # Demo script
+├── configs/                  # Cấu hình huấn luyện
+├── data/                     # Xử lý & lưu trữ dữ liệu
+│   ├── preprocessing/        # Scripts chuẩn bị dữ liệu
+│   └── raw/                  # Dữ liệu thô (gitignored)
 │
-├── scripts/                      # Utility scripts
-│   ├── setup/                    # Setup scripts
-│   │   ├── install_dependencies.bat
-│   │   └── quick_start.bat
-│   │
-│   ├── profiling/                # Profiling utilities
-│   │   └── flamegraph_guide.py
-│   │
-│   ├── check_dependencies.py
-│   ├── run_pipeline.bat
-│   └── run_pipeline.sh
+├── src/                      # Mã nguồn chính
+│   ├── api/                  # FastAPI server
+│   ├── model/                # Định nghĩa model
+│   ├── training/             # Pipeline huấn luyện
+│   ├── evaluation/           # Đánh giá WER/CER
+│   ├── data/                 # Data processing module
+│   └── utils/                # Tiện ích (quantization, ONNX, ...)
 │
-├── configs/                      # Configuration files
-│   └── (training configs, model configs)
-│
-├── notebooks/                    # Jupyter notebooks
-│   └── (exploratory analysis, demos)
-│
-├── tests/                        # Unit tests
-│   └── (test files)
-│
-├── docs/                         # Documentation
-│   └── (additional documentation)
-│
-├── Data/                         # Raw datasets
-│   ├── vivos/
-│   └── Data/ (VinBigData)
-│
-├── processed_data/               # Processed datasets
-│   ├── train.jsonl
-│   ├── validation.jsonl
-│   └── test.jsonl
-│
-├── models/                       # Trained models
-│   └── wav2vec2-vietnamese-asr/
-│
-├── language_models/              # Language models
-│   └── vietnamese_5gram.bin
-│
-├── results/                      # Evaluation results
-│   └── (predictions, metrics)
-│
-├── static/                       # Web UI assets
-│   └── index.html
-│
-├── requirements.txt              # Main dependencies
-├── requirements-core.txt         # Core dependencies
-├── requirements-optional.txt     # Optional dependencies
-├── .gitignore
-└── README.md
+├── notebooks/                # Jupyter notebooks (Colab/Kaggle)
+├── app/                      # Flask Web Demo (port 5000)
+├── tests/                    # Unit/Integration tests
+├── scripts/                  # Utility scripts
+├── results/                  # Kết quả, logs, checkpoints cũ
+├── docs/                     # Tài liệu bổ sung
+├── third_party/              # Công cụ bên thứ ba (PyFlame)
+├── final_model/              # Model Kaggle tốt nhất (gitignored)
+└── token/                    # HF token (gitignored)
 ```
 
-## 📂 Directory Purposes
+## Quy tắc / Conventions
 
-### Source Code (`src/`)
-- **data/**: All data processing, loading, and preprocessing
-- **models/**: Custom model definitions (reserved for future)
-- **training/**: Training pipelines and language models
-- **evaluation/**: Evaluation metrics and analysis
-- **api/**: Web API server
-- **utils/**: Shared utilities (optimization, profiling, demo)
+1. **`src/`** chứa tất cả mã nguồn core — training, evaluation, API, utils
+2. **`app/`** chứa Flask web demo — frontend + backend
+3. **`data/preprocessing/`** chứa scripts xử lý dataset
+4. **`scripts/`** chứa utility scripts (check, setup, migration)
+5. **`tests/`** chứa test files
+6. **`docs/`** chứa tài liệu bổ sung
+7. **`third_party/`** chứa công cụ bên ngoài không phải core project
+8. **`results/`** chứa outputs — training history, errors, checkpoints cũ
 
-### Scripts (`scripts/`)
-- **setup/**: Installation and quick start scripts
-- **profiling/**: Performance profiling tools
-- Root level: Pipeline and dependency management
+## Files gitignored (không push lên Git)
 
-### Configuration (`configs/`)
-- Training configurations
-- Model hyperparameters
-- Dataset configurations
-
-### Data Directories
-- **Data/**: Raw, unprocessed datasets (gitignored)
-- **processed_data/**: Cleaned and prepared data
-- **models/**: Saved model checkpoints
-- **language_models/**: N-gram or neural LMs
-- **results/**: Evaluation outputs and predictions
-
-### Development
-- **notebooks/**: Jupyter notebooks for exploration
-- **tests/**: Unit and integration tests
-- **docs/**: Additional documentation
-
-## 🔄 Import Examples
-
-```python
-# Data processing
-from src.data import VietnameseASRDataset, prepare_dataset, normalize_audio
-
-# Training
-from src.training import train_model, create_model, LanguageModelDecoder
-
-# Evaluation
-from src.evaluation import ASREvaluator
-
-# Utils
-from src.utils import CPUProfiler, optimize_model_for_inference
-
-# API
-from src.api import app
-```
-
-## 🎯 Benefits
-
-1. **Modularity**: Each component has its own directory
-2. **Scalability**: Easy to add new features
-3. **Testability**: Clear separation for unit tests
-4. **Maintainability**: Find code quickly
-5. **Professional**: Standard Python project structure
-6. **Collaboration**: Easy for team members to navigate
+- `token/` — Hugging Face API token
+- `final_model/` — Model weights (~377MB)
+- `data/raw/` — Raw audio datasets
+- `results/checkpoints/` — Large checkpoint files
+- `*.safetensors`, `*.bin`, `*.wav`, `*.mp3` — Large binary files

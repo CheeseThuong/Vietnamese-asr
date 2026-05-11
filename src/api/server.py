@@ -150,16 +150,30 @@ async def startup_event():
     """
     Load model khi khởi động server
     """
-    base_dir = Path(__file__).parent
-    model_dir = base_dir / 'models' / 'wav2vec2-vietnamese-asr' / 'final_model'
-    lm_dir = base_dir / 'language_models' / 'vietnamese_5gram.bin'
-    
-    if not model_dir.exists():
-        logger.warning(f"Model not found at: {model_dir}")
+    base_dir = Path(__file__).resolve().parent
+    project_root = base_dir.parent.parent
+
+    model_candidates = [
+        project_root / 'final_model',
+        project_root / 'models' / 'wav2vec2-vietnamese-asr' / 'final_model',
+        base_dir / 'models' / 'wav2vec2-vietnamese-asr' / 'final_model',
+    ]
+    lm_candidates = [
+        project_root / 'language_models' / 'vietnamese_5gram.bin',
+        base_dir / 'language_models' / 'vietnamese_5gram.bin',
+    ]
+
+    model_dir = next((candidate for candidate in model_candidates if candidate.exists()), None)
+    lm_dir = next((candidate for candidate in lm_candidates if candidate.exists()), None)
+
+    if model_dir is None:
+        logger.warning("Model not found in any known location")
+        for candidate in model_candidates:
+            logger.warning(f"  - {candidate}")
         logger.warning("Please train the model first or update model path")
         return
-    
-    lm_path = str(lm_dir) if lm_dir.exists() else None
+
+    lm_path = str(lm_dir) if lm_dir else None
     success = load_model(str(model_dir), lm_path)
     
     if not success:

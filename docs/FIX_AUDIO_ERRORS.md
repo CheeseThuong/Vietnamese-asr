@@ -70,7 +70,7 @@ if os.path.exists('/content/Vietnamese-asr'):
 
 | Relative Paths | Absolute Paths |
 |---------------|----------------|
-| `Data\vivos\test\...` | `D:\Projects\Đồ án trí tuệ nhân tạo\Data\vivos\test\...` |
+| `Data\vivos\test\...` | `D:\Projects\do_an_tri_tue_nhan_tao\Data\vivos\test\...` |
 | ❌ Phụ thuộc working directory | ✅ Luôn đúng mọi nơi |
 | ❌ Lỗi khi chạy từ folder khác | ✅ Hoạt động mọi context |
 | ❌ Yêu cầu chdir() trước | ✅ Không cần setup |

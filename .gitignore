@@ -1,6 +1,8 @@
-# .gitignore for Vietnamese ASR Project
+# ═══════════════════════════════════════════════════
+# .gitignore for VietASR Pro
+# ═══════════════════════════════════════════════════
 
-# Python
+# ── Python ──
 __pycache__/
 *.py[cod]
 *$py.class
@@ -25,74 +27,87 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# Virtual Environment
+# ── Virtual Environment ──
 venv/
 env/
 ENV/
 env.bak/
 venv.bak/
 
-# IDE
+# ── IDE ──
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+
+# ── OS ──
 .DS_Store
+Thumbs.db
+desktop.ini
 
-# Jupyter Notebook
+# ── Jupyter Notebook ──
 .ipynb_checkpoints
-*.ipynb
 
-# Model files (large files)
+# ── Sensitive / Credentials ──
+token/
+certs/
+.env
+*.env
+
+# ── Model files (large, gitignored) ──
+final_model/
+*.safetensors
+*.bin
 *.pt
 *.pth
-*.bin
 *.onnx
 models/
-checkpoints/
 
-# Data files
+# ── Old checkpoints ──
+results/checkpoints/
+
+# ── Data files (raw audio, large) ──
+data/raw/
+Data/
+processed_data/
+processed_data_merged/
+processed_data_vlsp/
+kaggle_output/
 *.wav
 *.mp3
 *.flac
 *.ogg
 *.m4a
-Data/
-processed_data/
 
-# Language models
+# ── Language models ──
 language_models/
 *.arpa
 *.klm
 
-# Results and logs
-results/
+# ── Logs ──
 logs/
 runs/
 *.log
 tensorboard/
 
-# Temporary files
+# ── Tools (ffmpeg, etc.) ──
+tools/
+
+# ── Temporary files ──
 *.tmp
 temp/
 tmp/
 .cache/
 
-# OS
-Thumbs.db
-.DS_Store
-desktop.ini
-
-# Compressed files
+# ── Compressed files ──
 *.zip
 *.tar.gz
 *.rar
 *.7z
 
-# Keep structure files but not content
-!Data/.gitkeep
-!processed_data/.gitkeep
-!models/.gitkeep
-!language_models/.gitkeep
+# ── Keep structure files ──
+!data/raw/.gitkeep
 !results/.gitkeep
+!tests/.gitkeep
+!notebooks/.gitkeep

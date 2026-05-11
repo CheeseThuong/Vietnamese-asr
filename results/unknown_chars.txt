@@ -1,0 +1,1 @@
+Không phát hiện ký tự ngoài vocab.
