@@ -254,12 +254,16 @@ VietASR-Pro/
 
 | Component | Minimum | Recommended |
 |---|---:|---:|
-| Python | 3.9+ | 3.10+ |
-| RAM | 4 GB | 8-16 GB |
-| Disk Space | 2 GB | 5 GB or more |
-| GPU for inference | Not required | NVIDIA CUDA, AMD ROCm, or Apple MPS |
-| GPU for training | Not recommended on CPU | Kaggle T4/P100 or stronger |
-| OS | Windows 10/11, macOS 12+, Ubuntu 20.04+ | Latest stable OS version |
+| **Python** | 3.9+ | **3.10 hoặc 3.11** |
+| RAM | 4 GB | 8–16 GB |
+| Disk Space | 2 GB | 5 GB trở lên |
+| GPU (inference) | Không bắt buộc | NVIDIA CUDA, AMD ROCm, Apple MPS |
+| GPU (training) | Không khuyến nghị CPU | Kaggle T4/P100 hoặc tương đương |
+| OS | Windows 10/11, macOS 12+, Ubuntu 20.04+ | Phiên bản ổn định mới nhất |
+
+> **⚠ Python 3.13 có thể gây lỗi tương thích với một số thư viện ASR (PyTorch, soundfile, librosa).**
+> Khuyến nghị dùng **Python 3.10** hoặc **Python 3.11**.
+> Tải tại: https://www.python.org/downloads/
 
 Core dependencies:
 
@@ -288,7 +292,122 @@ Phần này gộp nội dung từ `README.md` vào tài liệu chính để proj
 
 This section merges the installation guide into the main README so the project can be maintained with a single README file.
 
-### 7.0 Cài đặt nhanh | Quick Start
+---
+
+### 7.0 Khởi động nhanh — One-Click Launcher
+
+#### Windows
+
+Double-click `run_vietasr.bat` hoặc chạy trong CMD:
+
+```bat
+run_vietasr.bat
+```
+
+Launcher sẽ tự động:
+1. Phát hiện Python 3.10 / 3.11 (khuyến nghị) hoặc hiển thị cảnh báo nếu dùng 3.13
+2. Tạo `venv/` nếu chưa có, hoặc phát hiện nếu venv cũ dùng sai Python version
+3. Nâng cấp pip, setuptools, wheel
+4. Cài đặt `requirements.txt` — **dừng ngay nếu thất bại**
+5. Kiểm tra port 5000 có đang bị chiếm không
+6. Khởi động Flask server trong cửa sổ riêng (visible, để thấy import error)
+7. Poll `/api/health` tối đa **120 giây** (Wav2Vec2 load chậm trên CPU)
+8. Chỉ mở trình duyệt sau khi server xác nhận sẵn sàng
+
+#### macOS / Linux
+
+```bash
+chmod +x run_vietasr.sh
+./run_vietasr.sh
+```
+
+---
+
+### 7.0.1 Sửa venv sai Python version | Fix wrong venv Python version
+
+Nếu `venv/` được tạo bằng Python 3.13 nhưng bạn muốn dùng Python 3.10:
+
+**Windows:**
+
+```bat
+REM Xoa venv cu
+rmdir /s /q venv
+
+REM Tao lai bang Python 3.10 (thay duong dan neu can)
+C:\Python310\python.exe -m venv venv
+
+REM Kich hoat
+venv\Scripts\activate
+
+REM Cai lai thu vien
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
+```
+
+**macOS / Linux:**
+
+```bash
+# Xoa venv cu
+rm -rf venv
+
+# Tao lai bang Python 3.10
+python3.10 -m venv venv
+source venv/bin/activate
+
+pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
+```
+
+> Chạy lại `run_vietasr.bat` sẽ tự hỏi bạn có muốn xoá venv cũ không nếu phát hiện version sai.
+
+---
+
+### 7.0.2 Cài lại thư viện | Reinstall dependencies
+
+Nếu gặp lỗi import hoặc `pip install` lần đầu thất bại:
+
+```bash
+# Kich hoat venv truoc
+venv\Scripts\activate   # Windows
+source venv/bin/activate  # macOS/Linux
+
+# Nang cap pip
+python -m pip install --upgrade pip setuptools wheel
+
+# Cai lai requirements
+python -m pip install -r requirements.txt
+
+# Neu bi loi PyTorch, cai rieng truoc:
+python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
+
+---
+
+### 7.0.3 Chạy thủ công | Manual run
+
+Khi launcher đã cài đặt xong, có thể chạy server thủ công:
+
+```bash
+# 1. Kich hoat venv
+venv\Scripts\activate           # Windows CMD
+source venv/bin/activate        # macOS/Linux
+
+# 2. Chay Flask server
+python app/app.py
+
+# 3. Mo trinh duyet tai
+http://127.0.0.1:5000
+```
+
+Hoặc dùng module path:
+
+```bash
+python -m app.app
+```
+
+---
+
+### 7.0 Cài đặt nhanh cũ | Quick Start (legacy)
 
 ### Tiếng Việt
 
@@ -369,12 +488,15 @@ http://localhost:5000
 
 | Component | Minimum | Recommended |
 |---|---:|---:|
-| Python | 3.9+ | 3.10+ |
-| RAM | 4 GB | 8-16 GB |
+| **Python** | 3.9+ | **3.10 or 3.11** |
+| RAM | 4 GB | 8–16 GB |
 | Disk Space | 2 GB | 5 GB or more |
 | GPU | Not required for inference | CUDA/ROCm/Apple MPS for faster inference |
 | Training GPU | Not recommended on CPU | Kaggle T4/P100 or stronger |
 | OS | Windows 10/11, macOS 12+, Ubuntu 20.04+ | Latest stable version |
+
+> **⚠ Python 3.13 may cause compatibility issues** with PyTorch, soundfile, and librosa.
+> Use **Python 3.10** or **Python 3.11**. Download: https://www.python.org/downloads/
 
 #### Notes
 

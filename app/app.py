@@ -27,6 +27,16 @@ try:
 except AttributeError:
     pass
 
+# Tải biến môi trường từ file .env (phải chạy trước khi import bất kỳ thứ gì khác)
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    import pathlib as _pathlib
+    _env_file = _pathlib.Path(__file__).resolve().parent.parent / ".env"
+    _load_dotenv(dotenv_path=_env_file, override=False)
+    print(f"[OK] .env loaded from: {_env_file}")
+except ImportError:
+    print("[WARN] python-dotenv không cài — dùng biến môi trường hệ thống")
+
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, disconnect
@@ -62,6 +72,20 @@ from pydub import AudioSegment
 from werkzeug.utils import secure_filename
 import soundfile as sf
 import io
+
+# Import Gemini client tập trung (quản lý rate limit, cache, retry, chunking)
+try:
+    from gemini_client import (
+        summarize_transcript as _gemini_summarize,
+        test_gemini_connection as _gemini_test,
+        call_gemini as _gemini_call,
+    )
+    GEMINI_CLIENT_AVAILABLE = True
+except ImportError:
+    _gemini_summarize = None
+    _gemini_test = None
+    _gemini_call = None
+    GEMINI_CLIENT_AVAILABLE = False
 
 # Import DOCX functionality
 try:
@@ -171,6 +195,13 @@ DEVICE = None
 DEVICE_PREFERENCE = "auto"
 MODEL_SOURCE = None
 LOCAL_DATASET = None
+MODEL_LOAD_STATUS = "not_loaded"  # "not_loaded", "loading", "ready", "error"
+MODEL_LOAD_ERROR = None
+
+# === UPGRADE 2025: Đọc cấu hình từ biến môi trường ===
+USE_GEMINI = os.environ.get("USE_GEMINI", "false").lower() in ("true", "1", "yes")
+DEFAULT_LIVE_MODE = os.environ.get("DEFAULT_LIVE_MODE", "browser")  # 'browser' hoặc 'wav2vec2'
+SERVER_VERSION = "2.1.0"
 
 # Post-processing pipeline
 POST_PROCESSOR = None
@@ -277,10 +308,10 @@ def extract_audio_sample(audio_sample):
 
 def transcribe_audio_array(speech, sampling_rate=16000):
     """Transcribe an in-memory waveform using the loaded model."""
-    global MODEL, PROCESSOR, DEVICE
-
+    if MODEL_LOAD_STATUS == "loading":
+        return {"success": False, "error": "Model is still loading in background"}
     if MODEL is None or PROCESSOR is None:
-        return {"success": False, "error": "Model not loaded"}
+        return {"success": False, "error": f"Model not loaded. Error: {MODEL_LOAD_ERROR}"}
 
     try:
         if speech is None:
@@ -522,6 +553,25 @@ def load_model():
         print(f"✗ Error loading model: {e}")
         print("  Continuing without model - web interface will still work\n")
         return False
+
+def background_load_model():
+    """Load model in background thread to avoid blocking server startup"""
+    global MODEL_LOAD_STATUS, MODEL_LOAD_ERROR
+    MODEL_LOAD_STATUS = "loading"
+    print("[ASR Model] Starting background loading...")
+    try:
+        success = load_model()
+        if success:
+            MODEL_LOAD_STATUS = "ready"
+            print("[ASR Model] Loaded successfully in background!")
+        else:
+            MODEL_LOAD_STATUS = "error"
+            MODEL_LOAD_ERROR = "Failed to load model. Check server logs."
+            print("[ASR Model] Loading failed (load_model returned False)")
+    except Exception as e:
+        MODEL_LOAD_STATUS = "error"
+        MODEL_LOAD_ERROR = str(e)
+        print(f"[ASR Model] Exception during background loading: {e}")
 
 def allowed_file(filename):
     """Check if file extension is allowed"""
@@ -894,34 +944,80 @@ Bạn cần tôi giúp gì?"""
 # ===================== REALTIME WEBSOCKET (SOCKET.IO) =====================
 SESSION_BUFFERS = {}
 
-def get_new_tokens(prev_text: str, new_text: str) -> str:
-    """
-    So sánh prev_text và new_text, trả về phần MỚI của new_text
-    không bị trùng với đuôi của prev_text.
-    Dùng longest common suffix matching.
-    """
-    if not prev_text:
-        return new_text.strip()
+# --- HẰNG SỐ CẤU HÌNH VAD VÀ ỔN ĐỊNH NHẬN DẠNG ---
+# Tùy thuộc vào độ nhạy của micro và độ ồn của phòng, bạn có thể cần điều chỉnh các thông số này.
+VAD_RMS_THRESHOLD = 0.003       # Ngưỡng năng lượng âm thanh tối thiểu để nhận biết người nói (thấp hơn = nhạy hơn)
+VAD_SILENCE_SECONDS = 1.0       # Thời gian im lặng tối thiểu (giây) trước khi chốt câu tự động
+STABILITY_CYCLES = 3            # Số chu kỳ dịch liên tiếp có kết quả chuẩn hóa tương đương để coi là ổn định
+FORCE_COMMIT_SECONDS = 6.0      # Thời gian tối đa (giây) nói liên tục mà chưa chốt câu để ép chốt câu tránh trễ
+MIN_COMMIT_WORDS = 2            # Số lượng từ tối thiểu để chốt câu (tránh tiếng ồn hay từ rác siêu ngắn)
+INFERENCE_INTERVAL_S = 1.2      # Khoảng cách tối thiểu (giây) giữa các lần chạy mô hình Wav2Vec2 (tiết kiệm CPU)
+
+def clean_text_for_commit(text):
+    if not text:
+        return ""
+    # Keep letters, numbers, spaces (unicode-aware)
+    cleaned = re.sub(r'[^\w\s]', '', text)
+    # Remove multiple spaces
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
+
+def normalize_text_for_stability(text):
+    if not text:
+        return ""
+    text = text.lower().strip()
+    text = re.sub(r'[^\w\s]', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text
+
+def is_duplicate_or_garbage(text, last_text):
+    text = text.strip().lower()
+    last_text = last_text.strip().lower()
+    
+    # 1. Short valid Vietnamese responses exception
+    valid_short_responses = {'có', 'không', 'đúng', 'rồi', 'vâng', 'chưa', 'được'}
+    if text in valid_short_responses:
+        return False
         
-    prev_words = prev_text.strip().split()
-    new_words = new_text.strip().split()
+    # 2. Garbage words filter (unstable short fragments)
+    garbage_words = {'tan', 'an', 'ta', 'tâ', 'tân', 'a', 'ă', 'â', 'e', 'ê', 'i', 'o', 'ô', 'ơ', 'u', 'ư', 'y'}
+    words = text.split()
     
-    max_overlap = min(len(prev_words), len(new_words), 10)
-    overlap_len = 0
-    
-    for n in range(max_overlap, 0, -1):
-        if prev_words[-n:] == new_words[:n]:
-            overlap_len = n
-            break
+    if all(w in garbage_words for w in words):
+        logger.info(f"[ASR-Filter] Filtered garbage segment: '{text}'")
+        return True
+        
+    # 3. Too short filter: ignore phrases with less than MIN_COMMIT_WORDS
+    if len(words) < MIN_COMMIT_WORDS:
+        logger.info(f"[ASR-Filter] Filtered too short segment: '{text}'")
+        return True
+        
+    # 4. Exact duplicate check
+    if text == last_text:
+        logger.info(f"[ASR-Filter] Filtered exact duplicate: '{text}'")
+        return True
+        
+    # 5. Overlap duplicate check
+    if text in last_text or last_text in text:
+        words_last = last_text.split()
+        intersection = set(words).intersection(set(words_last))
+        if len(intersection) / max(len(words), len(words_last)) > 0.7:
+            logger.info(f"[ASR-Filter] Filtered high overlap duplicate: '{text}' vs '{last_text}'")
+            return True
             
-    new_part = new_words[overlap_len:]
-    return ' '.join(new_part)
+    return False
 
 @socketio.on('connect')
 def handle_connect():
     SESSION_BUFFERS[request.sid] = {
         'audio': np.array([], dtype=np.float32),
         'confirmed_text': '',
+        'last_committed_text': '',
+        'interim_text': '',
+        'silence_duration': 0.0,
+        'continuous_speech_duration': 0.0,
+        'last_predictions': [],
+        'last_inference_time': 0.0,
         'chunk_id': 0
     }
     emit('server_ready', {'message': 'Connected to ASR Server'})
@@ -932,7 +1028,6 @@ def handle_disconnect():
 
 @socketio.on('audio_chunk')
 def handle_audio_chunk(data):
-    # FIX: Removed 5 debug print statements that spammed console on every chunk
     if not isinstance(data, bytes):
         return
 
@@ -942,39 +1037,179 @@ def handle_audio_chunk(data):
     if pcm_data.size == 0:
         return
 
-    started_at = time.perf_counter()
     session = SESSION_BUFFERS.get(request.sid)
     if not session:
         return
 
-    # Append new data to buffer
+    # 1. Simple VAD-lite (RMS energy calculation)
+    rms = np.sqrt(np.mean(pcm_data**2))
+    
+    # Calculate chunk duration (PCM float32, 16000Hz, mono)
+    chunk_duration = pcm_data.size / 16000
+    
+    is_silent = rms < VAD_RMS_THRESHOLD
+    
+    if is_silent:
+        session['silence_duration'] = session.get('silence_duration', 0.0) + chunk_duration
+    else:
+        session['silence_duration'] = 0.0
+        session['continuous_speech_duration'] = session.get('continuous_speech_duration', 0.0) + chunk_duration
+
+    # 2. Append new data to buffer
     session['audio'] = np.concatenate([session['audio'], pcm_data])
 
-    # FIX: Keep max 4 seconds of audio for sliding window (16000 sr * 4s = 64000)
-    # Previously the buffer grew unbounded when no new tokens were emitted
-    MAX_BUFFER = 16000 * 4
+    # Keep max 5 seconds of audio for sliding window
+    MAX_BUFFER = 16000 * 5
     if len(session['audio']) > MAX_BUFFER:
         session['audio'] = session['audio'][-MAX_BUFFER:]
 
-    # Transcribe the buffer
-    result = transcribe_audio_array(session['audio'], 16000)
-    new_transcript = result.get('transcription', '')
-
-    new_part = get_new_tokens(session['confirmed_text'], new_transcript)
-    if new_part:
-        session['confirmed_text'] += (' ' + new_part) if session['confirmed_text'] else new_part
-        session['chunk_id'] += 1
-
-        latency = round((time.perf_counter() - started_at) * 1000)
-
+    # 3. Optimize CPU: Only run Wav2Vec2 inference every INFERENCE_INTERVAL_S seconds
+    now = time.time()
+    last_infer = session.get('last_inference_time', 0.0)
+    
+    if now - last_infer < INFERENCE_INTERVAL_S:
+        # Emit current status to frontend so it doesn't feel stuck
+        status_msg = "Đang nghe..."
+        if session.get('silence_duration', 0.0) > 0.5:
+            status_msg = "Đang nghe... (im lặng)"
+        else:
+            status_msg = "Đang nghe... (phát hiện âm thanh)"
+            
         emit('transcript_update', {
-            'text': new_part.strip(),
+            'text': session.get('interim_text', ''),
             'full_text': session['confirmed_text'].strip(),
             'chunk_id': session['chunk_id'],
             'is_final': False,
+            'status_message': status_msg,
+            'latency': 0
+        })
+        return
+
+    session['last_inference_time'] = now
+    started_at = time.perf_counter()
+
+    # 4. Transcribe the buffer
+    result = transcribe_audio_array(session['audio'], 16000)
+    new_transcript = result.get('transcription', '').strip()
+    
+    # 5. Stability Check using normalized text
+    norm_new = normalize_text_for_stability(new_transcript)
+    last_predictions = session.get('last_predictions', [])
+    last_predictions.append(norm_new)
+    if len(last_predictions) > STABILITY_CYCLES + 1:
+        last_predictions.pop(0)
+    session['last_predictions'] = last_predictions
+
+    is_stable = False
+    if len(last_predictions) >= STABILITY_CYCLES and norm_new:
+        recent = last_predictions[-STABILITY_CYCLES:]
+        if len(set(recent)) == 1:
+            is_stable = True
+
+    interim_text = new_transcript
+    session['interim_text'] = interim_text
+    
+    # 6. Silence / Stability / Force Commit decision
+    should_commit = False
+    commit_reason = ""
+    
+    if session['silence_duration'] >= VAD_SILENCE_SECONDS and interim_text:
+        should_commit = True
+        commit_reason = f"Đã chốt 1 đoạn (Khoảng lặng {session['silence_duration']:.1f}s)"
+    elif session.get('continuous_speech_duration', 0.0) >= FORCE_COMMIT_SECONDS and interim_text:
+        should_commit = True
+        commit_reason = f"Đã force commit sau {FORCE_COMMIT_SECONDS} giây"
+    elif is_stable and interim_text:
+        last_committed = session.get('last_committed_text', '')
+        if normalize_text_for_stability(interim_text) != normalize_text_for_stability(last_committed):
+            should_commit = True
+            commit_reason = f"Đã chốt 1 đoạn (Kết quả ổn định)"
+
+    if should_commit:
+        cleaned_text = clean_text_for_commit(interim_text)
+        last_committed = session.get('last_committed_text', '')
+        
+        if cleaned_text and not is_duplicate_or_garbage(cleaned_text, last_committed):
+            session['confirmed_text'] += (' ' + cleaned_text) if session['confirmed_text'] else cleaned_text
+            session['last_committed_text'] = cleaned_text
+            session['chunk_id'] += 1
+            
+            latency = round((time.perf_counter() - started_at) * 1000)
+            
+            logger.info(f"[ASR-Commit] Reason: {commit_reason}. Committed final segment: '{cleaned_text}'")
+            emit('transcript_update', {
+                'text': cleaned_text,
+                'full_text': session['confirmed_text'].strip(),
+                'chunk_id': session['chunk_id'],
+                'is_final': True,
+                'status_message': commit_reason,
+                'latency': latency
+            })
+            
+        # Reset rolling buffer and stability states
+        session['audio'] = np.array([], dtype=np.float32)
+        session['silence_duration'] = 0.0
+        session['continuous_speech_duration'] = 0.0
+        session['last_predictions'] = []
+        session['interim_text'] = ""
+        
+    else:
+        # Emit as interim result
+        latency = round((time.perf_counter() - started_at) * 1000)
+        cleaned_interim = clean_text_for_commit(interim_text)
+        
+        # Build status message
+        status_msg = "Đang xử lý Wav2Vec2..."
+        if session.get('silence_duration', 0.0) > 0.0:
+            status_msg = f"Đang nghe... (Khoảng lặng: {session['silence_duration']:.1f}s)"
+        else:
+            status_msg = f"Đang nghe... (Phát hiện âm thanh {session.get('continuous_speech_duration', 0.0):.1f}s)"
+            
+        emit('transcript_update', {
+            'text': cleaned_interim,
+            'full_text': session['confirmed_text'].strip(),
+            'chunk_id': session['chunk_id'],
+            'is_final': False,
+            'status_message': status_msg,
             'latency': latency
         })
 
+@socketio.on('stop_recording')
+def handle_stop_recording():
+    session = SESSION_BUFFERS.get(request.sid)
+    if not session:
+        return
+        
+    logger.info("[ASR-State] Stop Recording event received from client.")
+    
+    # Force transcribe and commit any remaining audio buffer
+    if len(session['audio']) > 0:
+        result = transcribe_audio_array(session['audio'], 16000)
+        final_text = result.get('transcription', '').strip()
+        cleaned = clean_text_for_commit(final_text)
+        last_committed = session.get('last_committed_text', '')
+        
+        if cleaned and not is_duplicate_or_garbage(cleaned, last_committed):
+            session['confirmed_text'] += (' ' + cleaned) if session['confirmed_text'] else cleaned
+            session['last_committed_text'] = cleaned
+            session['chunk_id'] += 1
+            
+            logger.info(f"[ASR-Commit-Stop] Committed remaining segment on stop: '{cleaned}'")
+            emit('transcript_update', {
+                'text': cleaned,
+                'full_text': session['confirmed_text'].strip(),
+                'chunk_id': session['chunk_id'],
+                'is_final': True,
+                'status_message': "Đã dừng và chốt đoạn cuối",
+                'latency': 0
+            })
+            
+    # Reset session buffers
+    session['audio'] = np.array([], dtype=np.float32)
+    session['silence_duration'] = 0.0
+    session['continuous_speech_duration'] = 0.0
+    session['last_predictions'] = []
+    session['interim_text'] = ""
 
 @socketio.on('correct_text')
 def handle_correct_text(data):
@@ -1010,15 +1245,181 @@ def api_status():
     return jsonify({
         "model_loaded": MODEL is not None,
         "device": str(DEVICE) if DEVICE else "N/A",
-        "status": "ready" if MODEL else "not_loaded",
+        "status": MODEL_LOAD_STATUS,
         "model_source": MODEL_SOURCE,
-        "available_devices": device_info
+        "available_devices": device_info,
+        "error": MODEL_LOAD_ERROR
     })
 
 @app.route('/health', methods=['GET'])
 def health():
     """Health check alias for Render and other deployment platforms"""
     return api_status()
+
+
+# ===================== UPGRADE 2025: NEW ENDPOINTS =====================
+
+@app.route('/api/health', methods=['GET'])
+def api_health():
+    """
+    Health check endpoint dành cho launcher và monitoring.
+    Trả về trạng thái chi tiết hơn /health để launcher biết server đã sẵn sàng.
+    """
+    model_ok = MODEL is not None
+    return jsonify({
+        "status": MODEL_LOAD_STATUS,
+        "model_loaded": model_ok,
+        "model_source": MODEL_SOURCE,
+        "device": str(DEVICE) if DEVICE else "cpu",
+        "server_version": SERVER_VERSION,
+        "use_gemini": USE_GEMINI,
+        "default_live_mode": DEFAULT_LIVE_MODE,
+        "ffmpeg_available": FFMPEG_AVAILABLE,
+        "diarization_available": SPEAKER_DIARIZER is not None,
+        "post_processing_available": POST_PROCESSOR is not None,
+    })
+
+
+@app.route('/api/gemini-status', methods=['GET'])
+def api_gemini_status():
+    """
+    Trả về trạng thái Gemini cho status card trên giao diện.
+    Không thực sự gọi Gemini — chỉ kiểm tra cấu hình.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    has_key = bool(api_key) and api_key not in (
+        "your_gemini_api_key_here",
+        "PASTE_MY_NEW_GEMINI_API_KEY_HERE",
+        "",
+    )
+    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+
+    if not GEMINI_CLIENT_AVAILABLE:
+        return jsonify({
+            "status": "unavailable",
+            "enabled": False,
+            "has_key": False,
+            "model": model_name,
+            "error": "google-genai library not installed"
+        })
+
+    if not has_key:
+        return jsonify({
+            "status": "no_key",
+            "enabled": False,
+            "has_key": False,
+            "model": model_name,
+            "error": "GEMINI_API_KEY chưa được cấu hình trong .env"
+        })
+
+    if not USE_GEMINI:
+        return jsonify({
+            "status": "disabled",
+            "enabled": False,
+            "has_key": True,
+            "model": model_name,
+            "error": "USE_GEMINI=false trong .env"
+        })
+
+    return jsonify({
+        "status": "ready",
+        "enabled": True,
+        "has_key": True,
+        "model": model_name,
+        "error": None
+    })
+
+
+@app.route('/api/config', methods=['GET'])
+def api_config():
+    """
+    Trả về cấu hình hiện tại của server để frontend biết chế độ hoạt động.
+    KHÔNG trả về API key hay thông tin nhạy cảm.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    has_gemini_key = bool(api_key) and api_key not in (
+        "your_gemini_api_key_here",
+        "PASTE_MY_NEW_GEMINI_API_KEY_HERE",
+        "",
+    )
+    return jsonify({
+        "server_version": SERVER_VERSION,
+        "model_source": MODEL_SOURCE,
+        "model_loaded": MODEL is not None,
+        "device": str(DEVICE) if DEVICE else "cpu",
+        "default_live_mode": DEFAULT_LIVE_MODE,
+        "use_gemini": USE_GEMINI,
+        "gemini_configured": has_gemini_key,
+        "gemini_model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite"),
+        "ffmpeg_available": FFMPEG_AVAILABLE,
+        "diarization_available": SPEAKER_DIARIZER is not None,
+        "post_processing_available": POST_PROCESSOR is not None,
+        "max_file_size_mb": MAX_FILE_SIZE // (1024 * 1024),
+        "allowed_extensions": sorted(list(ALLOWED_EXTENSIONS)),
+        "chunk_duration_s": CHUNK_DURATION_S,
+    })
+
+
+@app.route('/api/export-transcript', methods=['POST'])
+def api_export_transcript():
+    """
+    Xuất transcript và/hoặc summary thành file text.
+    Input JSON: { transcript, summary, filename, format }
+    Output: file text/plain để download.
+    """
+    try:
+        data = request.get_json() or {}
+        transcript = data.get('transcript', '').strip()
+        summary = data.get('summary', '').strip()
+        filename = data.get('filename', 'vietasr_export') or 'vietasr_export'
+        export_format = data.get('format', 'transcript')  # 'transcript' | 'summary' | 'full'
+
+        if not transcript and not summary:
+            return jsonify({"success": False, "error": "Không có nội dung để xuất"}), 400
+
+        # Tạo nội dung file
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lines = []
+
+        if export_format == 'summary' and summary:
+            lines.append(f"=== VietASR Pro — Tóm Tắt ===")
+            lines.append(f"Thời gian: {now_str}")
+            lines.append("")
+            lines.append(summary)
+        elif export_format == 'full':
+            lines.append(f"=== VietASR Pro — Kết Quả Nhận Dạng ===")
+            lines.append(f"Thời gian: {now_str}")
+            lines.append("")
+            if transcript:
+                lines.append("--- TRANSCRIPT ---")
+                lines.append(transcript)
+                lines.append("")
+            if summary:
+                lines.append("--- TÓM TẮT ---")
+                lines.append(summary)
+        else:
+            # Mặc định: chỉ transcript
+            lines.append(f"=== VietASR Pro — Transcript ===")
+            lines.append(f"Thời gian: {now_str}")
+            lines.append("")
+            lines.append(transcript or summary)
+
+        content = "\n".join(lines)
+        safe_filename = f"{filename}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+
+        from io import BytesIO
+        buf = BytesIO(content.encode('utf-8'))
+        buf.seek(0)
+
+        return send_file(
+            buf,
+            mimetype='text/plain; charset=utf-8',
+            as_attachment=True,
+            download_name=safe_filename,
+        )
+    except Exception as e:
+        logger.error(f"[Export] Lỗi xuất file: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/device-info', methods=['GET'])
 def api_device_info():
@@ -1091,6 +1492,19 @@ def api_normalize():
 @app.route('/api/upload', methods=['POST'])
 def api_upload():
     """Upload and transcribe audio file with chunking + diarization"""
+    if MODEL_LOAD_STATUS == "loading":
+        return jsonify({
+            "success": False,
+            "error": "Mô hình Wav2Vec2 đang được tải ở chế độ nền. Vui lòng thử lại sau.",
+            "error_code": "MODEL_LOADING"
+        }), 503
+    elif MODEL is None or PROCESSOR is None:
+        return jsonify({
+            "success": False,
+            "error": f"Mô hình Wav2Vec2 chưa được tải thành công. Lỗi: {MODEL_LOAD_ERROR}",
+            "error_code": "MODEL_NOT_LOADED"
+        }), 503
+
     filepath = None
     try:
         # Rate limiting
@@ -1167,11 +1581,13 @@ def api_upload():
             logger.warning(f"[PERF] Slow inference: {processing_time_seconds:.2f}s exceeds 2s target")
 
         if result.get('success'):
+            full_transcript = result.get('transcription', '')
+
             if ground_truth:
                 result['ground_truth'] = ground_truth
                 if compute_wer:
                     try:
-                        result['wer'] = round(float(compute_wer(ground_truth, result['transcription'])), 4)
+                        result['wer'] = round(float(compute_wer(ground_truth, full_transcript)), 4)
                     except Exception:
                         result['wer'] = None
                 else:
@@ -1184,6 +1600,39 @@ def api_upload():
                 'size': file_size,
                 'format': file_ext.upper()
             }
+
+            # Gọi Gemini để tóm tắt SAU KHI transcript hoàn chỉnh.
+            # Nếu Gemini thất bại, vẫn trả về transcript cho frontend.
+            # KHÔNG gọi Gemini cho từng audio chunk rải rộc.
+            auto_summarize = request.form.get('auto_summarize', 'false').lower() in ('true', '1', 'on')
+            result['summary'] = None
+            result['summary_error'] = None
+            result['model'] = None
+
+            if auto_summarize and GEMINI_CLIENT_AVAILABLE and full_transcript:
+                gemini_key = os.environ.get('GEMINI_API_KEY', '').strip()
+                if gemini_key:
+                    try:
+                        logger.info(f"[Upload] Bắt đầu tóm tắt tự động, transcript={len(full_transcript)} ký tự")
+                        gem_result = _gemini_summarize(
+                            transcript=full_transcript,
+                            mode='summary',
+                            api_key=gemini_key,
+                        )
+                        result['summary'] = gem_result.get('summary')
+                        result['model'] = gem_result.get('model')
+                        logger.info("[Upload] Tóm tắt tự động thành công")
+                    except PermissionError as _p:
+                        result['summary_error'] = 'forbidden_403'
+                        logger.warning(f"[Upload] Gemini 403: {_p}")
+                    except RuntimeError as _r:
+                        result['summary_error'] = 'rate_limit_429'
+                        logger.warning(f"[Upload] Gemini 429 exhausted: {_r}")
+                    except Exception as _e:
+                        result['summary_error'] = str(_e)[:120]
+                        logger.warning(f"[Upload] Gemini thất bại: {_e}")
+                else:
+                    result['summary_error'] = 'no_api_key'
 
         logger.info(f"Upload: {file.filename} ({file_size}B) -> {result.get('word_count', 0)} words in {result.get('processing_time_seconds', 0)}s")
         return jsonify(result)
@@ -1205,35 +1654,164 @@ def api_upload():
 
 @app.route('/api/summarize', methods=['POST'])
 def api_summarize():
-    """Summarize transcript using Gemini via PostProcessor."""
-    if not POST_PROCESSOR:
-        return jsonify({"success": False, "error": "Post-processor not available"}), 503
+    """
+    Tóm tắt transcript bằng Gemini API.
+    Hỗ trợ transcript dài bằng cách tách chunks và tổng hợp.
+    Chỉ gọi Gemini SAU KHI transcript hoàn chỉnh.
+    """
+    # Lấy dữ liệu trước try để except blocks có thể truy cập
+    data = request.get_json() or {}
+    text = data.get('text', '').strip()
+    mode = data.get('mode', 'summary')
+
     try:
-        data = request.get_json() or {}
-        text = data.get('text', '').strip()
-        mode = data.get('mode', 'summary')
-
         if not text:
-            return jsonify({"success": False, "error": "No text provided"}), 400
+            return jsonify({
+                "success": False,
+                "error": "Không có văn bản để tóm tắt",
+                "transcript": "",
+                "summary": None,
+                "chunks_count": 0,
+                "model": None,
+                "summary_error": "empty_text"
+            }), 400
 
-        prompts = {
-            'summary': "Hay tom tat noi dung chinh cua doan van ban ASR sau day. Trinh bay chuyen nghiep, ngan gon:",
-            'meeting': "Hay tao bien ban cuoc hop tu doan van ban ASR sau. Bao gom: chu de, noi dung chinh, quyet dinh, hanh dong tiep theo:",
-            'notes': "Hay tao ghi chu hoc tap tu doan van ban ASR sau. Trinh bay dang bullet points:",
-            'translate': "Dich doan van ban tieng Viet sau sang tieng Anh. Chi tra ve ban dich:",
-        }
-        system_prompt = prompts.get(mode, prompts['summary'])
+        # Kiểm tra gemini_client có sẵn không
+        if not GEMINI_CLIENT_AVAILABLE or _gemini_summarize is None:
+            return jsonify({
+                "success": False,
+                "transcript": text,
+                "summary": None,
+                "chunks_count": 0,
+                "model": None,
+                "summary_error": "gemini_client_unavailable",
+                "error": "gemini_client chưa được cài đặt. pip install google-genai"
+            }), 503
 
-        result = POST_PROCESSOR.process(text, system_prompt=system_prompt)
+        # Đọc API key từ biến môi trường — KHÔNG lấy từ frontend
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key or api_key == "PASTE_MY_NEW_GEMINI_API_KEY_HERE":
+            return jsonify({
+                "success": False,
+                "transcript": text,
+                "summary": None,
+                "chunks_count": 0,
+                "model": None,
+                "summary_error": "no_api_key",
+                "error": "GEMINI_API_KEY chưa được cấu hình trong file .env"
+            }), 503
+
+        logger.info(f"[Summarize] Gọi Gemini, mode={mode}, text={len(text)} ký tự")
+
+        # Gọi Gemini — hỗ trợ chunking cho transcript dài
+        gem_result = _gemini_summarize(
+            transcript=text,
+            mode=mode,
+            api_key=api_key,
+        )
+
+        summary = gem_result.get('summary', '')
+        chunks_count = gem_result.get('chunks_count', 1)
+        model_used = gem_result.get('model', '')
+
+        logger.info(
+            f"[Summarize] Thành công: chunks={chunks_count}, "
+            f"summary={len(summary)} ký tự, model={model_used}"
+        )
         return jsonify({
             "success": True,
-            "text": result.get("processed", text),
+            "transcript": text,
+            "summary": summary,
+            "chunks_count": chunks_count,
+            "model": model_used,
+            "summary_error": None,
             "mode": mode,
-            "steps_applied": result.get("steps_applied", []),
         })
+
+    except PermissionError as perm_err:
+        # Lỗi 403: API key không hợp lệ
+        logger.error(f"[Summarize] 403 Forbidden: {perm_err}")
+        return jsonify({
+            "success": False,
+            "transcript": text,
+            "summary": None,
+            "chunks_count": 0,
+            "model": None,
+            "summary_error": "forbidden_403",
+            "error": str(perm_err)
+        }), 403
+
+    except RuntimeError as rate_err:
+        # Lỗi 429 sau khi hết số lần retry
+        logger.error(f"[Summarize] Rate limit exhausted: {rate_err}")
+        return jsonify({
+            "success": False,
+            "transcript": text,
+            "summary": None,
+            "chunks_count": 0,
+            "model": None,
+            "summary_error": "rate_limit_429",
+            "error": "Gemini API đang quá tải (429). Vui lòng thử lại sau vài phút."
+        }), 429
+
+    except ValueError as val_err:
+        # Thiếu API key
+        logger.error(f"[Summarize] Thiếu API key: {val_err}")
+        return jsonify({
+            "success": False,
+            "transcript": text,
+            "summary": None,
+            "chunks_count": 0,
+            "model": None,
+            "summary_error": "no_api_key",
+            "error": str(val_err)
+        }), 503
+
+    except TimeoutError as timeout_err:
+        # Timeout
+        logger.error(f"[Summarize] Timeout: {timeout_err}")
+        return jsonify({
+            "success": False,
+            "transcript": text,
+            "summary": None,
+            "chunks_count": 0,
+            "model": None,
+            "summary_error": "timeout",
+            "error": "Gemini API phản hồi quá chậm. Vui lòng thử lại."
+        }), 504
+
     except Exception as e:
-        logger.error(f"Summarize error: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"[Summarize] Lỗi không xác định: {e}")
+        return jsonify({
+            "success": False,
+            "transcript": text,
+            "summary": None,
+            "chunks_count": 0,
+            "model": None,
+            "summary_error": "unknown_error",
+            "error": str(e)
+        }), 500
+
+
+@app.route('/api/gemini-test', methods=['GET'])
+def api_gemini_test():
+    """
+    Kiểm tra kết nối Gemini API bằng cách gửi prompt ngắn.
+    Trả về: success, model, response, error
+    API key được đọc từ biến môi trường — KHÔNG lộ ra response.
+    """
+    if not GEMINI_CLIENT_AVAILABLE or _gemini_test is None:
+        return jsonify({
+            "success": False,
+            "model": None,
+            "response": None,
+            "error": "gemini_client chưa được cài đặt. pip install google-genai"
+        }), 503
+
+    # Đọc API key từ env — KHÔNG nhận từ query param hay body (bảo mật)
+    result = _gemini_test()
+    status_code = 200 if result.get('success') else 503
+    return jsonify(result), status_code
 
 
 @app.route('/api/demo/local-sample', methods=['GET'])
@@ -1416,21 +1994,25 @@ def api_pp_test():
 
 if __name__ == '__main__':
     print("=" * 70)
-    print("Vietnamese ASR Web Demo")
+    print("VietASR Pro — Server")
     print("=" * 70)
-    
-    # Load model
-    model_loaded = load_model()
-    
-    if model_loaded:
-        print("\n✓ Server ready!")
-        print("  Open: http://localhost:5000")
-        print("\nPress Ctrl+C to stop\n")
-    else:
-        print("\n⚠ Server starting without model")
-        print("  Transcription will not work until model is loaded")
-        print("  Web interface will still be available\n")
-    
-    # Run Flask app with SocketIO
-    port = int(os.environ.get("PORT", 5000))
-    socketio.run(app, debug=False, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)
+
+    # Start background model loading thread
+    import threading
+    t = threading.Thread(target=background_load_model)
+    t.daemon = True
+    t.start()
+
+    print("\n✓ Server đang khởi động ở chế độ tải model nền (background model loading)!")
+    print(f"  Mở trình duyệt tại: http://{os.environ.get('FLASK_HOST', '127.0.0.1')}:{os.environ.get('FLASK_PORT', os.environ.get('PORT', '5000'))}")
+    print("\nNhấn Ctrl+C để dừng\n")
+
+    # UPGRADE 2025: Đọc host/port từ biến môi trường
+    # Ưu tiên: FLASK_HOST/FLASK_PORT -> PORT (Render) -> mặc định
+    _host = os.environ.get("FLASK_HOST", "0.0.0.0")
+    _port = int(
+        os.environ.get("FLASK_PORT")
+        or os.environ.get("PORT")
+        or 5000
+    )
+    socketio.run(app, debug=False, host=_host, port=_port, allow_unsafe_werkzeug=True)

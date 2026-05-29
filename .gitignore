@@ -29,6 +29,7 @@ MANIFEST
 
 # ── Virtual Environment ──
 venv/
+.venv/
 env/
 ENV/
 env.bak/
@@ -98,6 +99,8 @@ tools/
 *.tmp
 temp/
 tmp/
+uploads/
+outputs/
 .cache/
 ~$*.docx
 docs/

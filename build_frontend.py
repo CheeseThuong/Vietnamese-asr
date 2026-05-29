@@ -6,7 +6,15 @@ Run from project root: python build_frontend.py
 import shutil
 import os
 import re
+import sys
 from pathlib import Path
+
+# Force UTF-8 for stdout/stderr on Windows
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except AttributeError:
+    pass
 
 ROOT  = Path(__file__).resolve().parent
 APP   = ROOT / "app"
@@ -41,6 +49,11 @@ html = html.replace(
     "{{ url_for('static', filename='js/main.js') }}",
     "./js/main.js"
 )
+html = html.replace(
+    "{{ url_for('static', filename='js/socket.io.min.js') }}",
+    "./js/socket.io.min.js"
+)
+
 
 # 2. Insert BASE_URL config block immediately before the main.js <script> tag
 BASE_BLOCK = (

@@ -41,6 +41,7 @@ onnxruntime>=1.16.0
 # Utilities
 pyyaml>=6.0
 python-dotenv>=1.0.0
+google-genai>=1.0.0
 
 # Speaker Diarization
 simple-diarizer>=0.0.13

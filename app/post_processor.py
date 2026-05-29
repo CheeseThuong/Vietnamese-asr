@@ -131,13 +131,13 @@ class PostProcessor:
             "pipeline": {
                 "fix_duplicates": True,
                 "use_dictionary": True,
-                "use_llm": False,
+                "use_llm": False,  # Tắt mặc định — Gemini chỉ gọi qua /api/summarize
             },
             "llm": {
                 "provider": "gemini",
-                "api_key": "",
-                "model": "gemini-2.0-flash",
-                "max_tokens": 4096,
+                "api_key": "",  # Không lưu key trong code — dùng env GEMINI_API_KEY
+                "model": "gemini-2.5-flash-lite-preview-06-17",
+                "max_tokens": 2048,
                 "temperature": 0.3,
             },
         }
@@ -243,7 +243,9 @@ class PostProcessor:
             return text
 
         provider = self.llm_cfg.get("provider", "gemini")
-        api_key = self.llm_cfg.get("api_key", "")
+
+        # Ƭu tiên đọc API key từ biến môi trường (bảo mật hơn)
+        api_key = os.environ.get("GEMINI_API_KEY", "") or self.llm_cfg.get("api_key", "")
 
         if not api_key:
             print("⚠ LLM API key chưa được cấu hình — bỏ qua bước LLM")

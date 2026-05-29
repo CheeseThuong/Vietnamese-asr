@@ -1789,3 +1789,499 @@ small {
   outline: none;
   box-shadow: 0 0 0 3px var(--color-primary-glow);
 }
+
+/* =============================================
+   UPGRADE 2025 — STATUS CARDS BAR
+   Thanh trạng thái luôn hiển thị bên trên nội dung
+   ============================================= */
+.status-cards-bar {
+  display: flex;
+  gap: var(--space-3);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.status-card-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-3);
+  min-width: 130px;
+  transition: border-color var(--ease-fast), box-shadow var(--ease-fast);
+  position: relative;
+  overflow: hidden;
+}
+
+.status-card-item::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--color-border);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  transition: background var(--ease-fast);
+}
+
+.status-card-item:hover {
+  border-color: var(--color-border-hover);
+}
+
+.scard-icon {
+  color: var(--color-text-3);
+  display: flex;
+  align-items: center;
+}
+.scard-icon svg { width: 15px; height: 15px; }
+
+.scard-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.scard-label {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-3);
+  line-height: 1.2;
+}
+
+.scard-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scard-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-text-3);
+  flex-shrink: 0;
+}
+
+.scard-dot-green { background: var(--color-success); animation: dot-pulse 2s infinite; }
+.scard-dot-blue  { background: var(--color-primary); }
+.scard-dot-warn  { background: var(--color-warning); }
+.scard-dot-err   { background: var(--color-danger); }
+
+/* Status card left border colors */
+.status-card-item[data-status="ok"]::before   { background: var(--color-success); }
+.status-card-item[data-status="warn"]::before { background: var(--color-warning); }
+.status-card-item[data-status="err"]::before  { background: var(--color-danger); }
+.status-card-item[data-status="idle"]::before { background: var(--color-text-3); }
+
+/* =============================================
+   UPGRADE 2025 — LIVE MODE SELECTOR
+   Pills để chọn Browser vs Wav2Vec2
+   ============================================= */
+.live-mode-selector {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-text-2);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--ease-fast);
+}
+
+.mode-pill:hover {
+  border-color: var(--color-border-hover);
+  color: var(--color-text-1);
+}
+
+.mode-pill.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: white;
+  box-shadow: 0 0 12px var(--color-primary-glow);
+}
+
+.mode-pill-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: rgba(255,255,255,0.15);
+}
+
+.mode-pill-badge.research {
+  background: rgba(245,158,11,0.2);
+  color: var(--color-warning);
+}
+
+.mode-pill.active .mode-pill-badge {
+  background: rgba(255,255,255,0.25);
+  color: white;
+}
+
+.mode-description {
+  font-size: 12px;
+  color: var(--color-text-2);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
+  line-height: 1.5;
+}
+
+.mode-description strong {
+  color: var(--color-text-1);
+}
+
+/* =============================================
+   UPGRADE 2025 — INTERIM BOX
+   Hiển thị văn bản đang nhận dạng (interim)
+   ============================================= */
+.interim-box {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  background: rgba(99, 102, 241, 0.05);
+  border: 1px dashed rgba(99, 102, 241, 0.25);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  min-height: 38px;
+  transition: opacity var(--ease-fast);
+}
+
+.interim-box:empty, .interim-box:not(:has(.interim-text:not(:empty))) {
+  opacity: 0.4;
+}
+
+.interim-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-primary);
+  white-space: nowrap;
+  padding-top: 1px;
+}
+
+.interim-text {
+  font-style: italic;
+  color: var(--color-text-2);
+  font-size: 13px;
+  line-height: 1.5;
+  animation: text-blink 1.2s ease-in-out infinite;
+}
+
+@keyframes text-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* =============================================
+   UPGRADE 2025 — TRANSCRIPT SEGMENTS
+   Hiển thị theo đoạn với timestamp [HH:MM:SS]
+   ============================================= */
+.segment-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+}
+
+.transcript-segment {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  transition: background var(--ease-fast);
+  animation: seg-in 200ms ease-out both;
+}
+
+@keyframes seg-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.transcript-segment:hover {
+  background: var(--color-surface-2);
+}
+
+.segment-timestamp {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-primary);
+  white-space: nowrap;
+  padding-top: 2px;
+  min-width: 120px;
+  opacity: 0.8;
+}
+
+.segment-text {
+  flex: 1;
+  font-size: 14px;
+  color: var(--color-text-1);
+  line-height: 1.6;
+}
+
+/* =============================================
+   UPGRADE 2025 — INLINE SUMMARY AREA
+   Tóm tắt hiển thị trực tiếp trên trang
+   ============================================= */
+.inline-summary-area {
+  background: linear-gradient(135deg, rgba(139,92,246,0.05), rgba(99,102,241,0.05));
+  border: 1px solid rgba(139,92,246,0.2);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  animation: fade-in var(--ease-normal);
+}
+
+.inline-summary-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-accent);
+}
+
+.inline-summary-header svg {
+  width: 15px;
+  height: 15px;
+}
+
+.summary-model-badge {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: rgba(139,92,246,0.15);
+  color: var(--color-accent);
+}
+
+.inline-summary-body {
+  font-size: 14px;
+  color: var(--color-text-1);
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
+.inline-summary-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
+}
+
+/* =============================================
+   UPGRADE 2025 — KEYWORDS PANEL
+   Hiển thị từ khóa dạng pill
+   ============================================= */
+.keywords-panel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.keywords-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-3);
+  white-space: nowrap;
+}
+
+.keywords-list {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.keyword-chip {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-1);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 10px;
+  border-radius: var(--radius-full);
+  cursor: default;
+  transition: all var(--ease-fast);
+  animation: chip-in 200ms ease-out both;
+}
+
+@keyframes chip-in {
+  from { opacity: 0; transform: scale(0.85); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.keyword-chip:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+/* =============================================
+   UPGRADE 2025 — LATENCY BADGE
+   Hiển thị độ trễ nhận dạng
+   ============================================= */
+.latency-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-3);
+}
+
+.latency-badge.fast { color: var(--color-success); border-color: rgba(16,185,129,0.3); }
+.latency-badge.slow { color: var(--color-warning); border-color: rgba(245,158,11,0.3); }
+
+/* =============================================
+   UPGRADE 2025 — UPLOAD MODEL NOTE
+   Ghi chú nhỏ về mô hình Wav2Vec2 trên upload
+   ============================================= */
+.upload-model-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-text-3);
+  background: var(--color-surface-2);
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
+  margin: var(--space-2) 0;
+}
+
+.upload-model-note strong {
+  color: var(--color-text-2);
+}
+
+/* =============================================
+   UPGRADE 2025 — SETTINGS CARD (Demo Mode)
+   ============================================= */
+.settings-group-card {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.settings-group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-1);
+  margin-bottom: var(--space-3);
+}
+
+.settings-group-header svg {
+  width: 16px;
+  height: 16px;
+  color: var(--color-primary);
+}
+
+.setting-note {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--color-text-3);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.demo-mode-card {
+  background: linear-gradient(135deg, rgba(99,102,241,0.05), rgba(139,92,246,0.05));
+  border-color: rgba(99,102,241,0.2);
+}
+
+/* =============================================
+   UPGRADE 2025 — DEMO MODE
+   Body class 'demo-mode': lớn hơn, sạch hơn
+   ============================================= */
+body.demo-mode .btn-control {
+  width: 70px;
+  height: 70px;
+}
+
+body.demo-mode .btn-ai-summary {
+  padding: var(--space-3) var(--space-6);
+  font-size: 14px;
+}
+
+body.demo-mode .scard-value {
+  font-size: 13px;
+}
+
+body.demo-mode .transcript-segment,
+body.demo-mode .speaker-line-text,
+body.demo-mode .final-text {
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+/* Ẩn thông tin debug/kỹ thuật khi demo mode */
+body.demo-mode .latency-badge,
+body.demo-mode .engine-badge,
+body.demo-mode .upload-model-note {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* =============================================
+   UPGRADE 2025 — BTN-AI-SUMMARY DISABLED
+   ============================================= */
+.btn-ai-summary:disabled,
+.btn-ai-summary[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* =============================================
+   UPGRADE 2025 — RESPONSIVENESS FIX
+   ============================================= */
+@media (max-width: 1200px) {
+  .status-cards-bar {
+    gap: var(--space-2);
+  }
+  .status-card-item {
+    min-width: 110px;
+    padding: var(--space-2) var(--space-3);
+  }
+}
+
+@media (max-width: 900px) {
+  .status-cards-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
+

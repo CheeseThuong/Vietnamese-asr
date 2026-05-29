@@ -1,20 +1,19 @@
-<!-- 
-  @file: index.html
-  @description: Giao diện chính của VietASR Pro (Thiết kế Component-based theo chuẩn SaaS).
+<!--
+  @file: index.html (app/templates/index.html)
+  @description: VietASR Pro — Giao diện sản phẩm hiện đại, trình bày demo.
+                Nguồn gốc: app/templates/index.html (Flask serves via Jinja2)
+                Build ra frontend/index.html bằng build_frontend.py
   @author: Nguyễn Trí Thượng
   @project: VietASR Pro
-  @email: nguyentrithuong471@gmail.com
-  @github: CheeseThuong
-  @version: 2.0.0
+  @version: 2.1.0 (UPGRADE 2025)
 -->
 <!DOCTYPE html>
 <html lang="vi" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VietASR Pro - Nhận Dạng Giọng Nói Tiếng Việt</title>
-    <meta name="description" content="Ứng dụng nhận dạng giọng nói tiếng Việt chuyên nghiệp sử dụng AI Wav2Vec2">
-    <!-- Google Fonts: Inter, Be Vietnam Pro, JetBrains Mono -->
+    <title>VietASR Pro — Nhận Dạng Giọng Nói Tiếng Việt</title>
+    <meta name="description" content="VietASR Pro: Ứng dụng nhận dạng giọng nói tiếng Việt chuyên nghiệp. Mô hình Wav2Vec2 fine-tuned cho tiếng Việt. Demo trực tiếp.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -27,29 +26,24 @@
     <aside class="sidebar">
         <div class="logo-container">
             <div class="logo-icon">
-                <!-- fa-chart-line equivalent -->
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
             </div>
             <h1 class="logo-text">VietASR <span class="badge-pro">PRO</span></h1>
         </div>
         <nav class="nav-menu">
             <button class="nav-item active" data-tab="recording">
-                <!-- fa-microphone -->
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
                 <span>Thu Âm</span>
             </button>
             <button class="nav-item" data-tab="upload">
-                <!-- fa-upload -->
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                 <span>Tải File</span>
             </button>
             <button class="nav-item" data-tab="history">
-                <!-- fa-history -->
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                 <span>Lịch Sử</span>
             </button>
             <button class="nav-item" data-tab="settings">
-                <!-- fa-cog -->
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                 <span>Cài Đặt</span>
             </button>
@@ -63,7 +57,6 @@
                 </div>
             </div>
             <div class="device-info">
-                <!-- fa-microchip -->
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
                 <span id="deviceInfoText">CPU</span>
             </div>
@@ -75,21 +68,88 @@
         <header class="top-bar">
             <div class="page-title">
                 <h2 id="pageTitle">Phòng Thu Âm</h2>
-                <p class="page-subtitle" id="pageSubtitle">
-                    Chuyển đổi giọng nói thành văn bản trong thời gian thực
-                </p>
+                <p class="page-subtitle" id="pageSubtitle">Chuyển đổi giọng nói thành văn bản trong thời gian thực</p>
             </div>
             <div class="top-actions">
                 <button class="theme-toggle" id="themeToggle" title="Sáng/Tối">
-                    <!-- fa-moon default -->
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
                 </button>
                 <div class="user-profile">
-                    <!-- fa-user -->
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                 </div>
             </div>
         </header>
+
+        <!-- ===== UPGRADE 2025: STATUS CARDS BAR (always visible) ===== -->
+        <div class="status-cards-bar" id="statusCardsBar">
+            <!-- Card: ASR Model -->
+            <div class="status-card-item" id="scardModel">
+                <div class="scard-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
+                </div>
+                <div class="scard-body">
+                    <span class="scard-label">ASR Model</span>
+                    <span class="scard-value" id="scardModelVal">Wav2Vec2</span>
+                </div>
+                <div class="scard-dot scard-dot-blue" id="scardModelDot"></div>
+            </div>
+            <!-- Card: Live Mode -->
+            <div class="status-card-item" id="scardLiveMode">
+                <div class="scard-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                </div>
+                <div class="scard-body">
+                    <span class="scard-label">Live Mode</span>
+                    <span class="scard-value" id="scardLiveModeVal">Browser</span>
+                </div>
+                <div class="scard-dot scard-dot-green" id="scardLiveModeDot"></div>
+            </div>
+            <!-- Card: Device -->
+            <div class="status-card-item" id="scardDevice">
+                <div class="scard-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect></svg>
+                </div>
+                <div class="scard-body">
+                    <span class="scard-label">Device</span>
+                    <span class="scard-value" id="scardDeviceVal">CPU</span>
+                </div>
+                <div class="scard-dot" id="scardDeviceDot"></div>
+            </div>
+            <!-- Card: Gemini -->
+            <div class="status-card-item" id="scardGemini">
+                <div class="scard-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"></path><path d="m14 7 3 3"></path></svg>
+                </div>
+                <div class="scard-body">
+                    <span class="scard-label">AI Assistant</span>
+                    <span class="scard-value" id="scardGeminiVal">Đang kiểm tra...</span>
+                </div>
+                <div class="scard-dot" id="scardGeminiDot"></div>
+            </div>
+            <!-- Card: Server -->
+            <div class="status-card-item" id="scardServer">
+                <div class="scard-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+                </div>
+                <div class="scard-body">
+                    <span class="scard-label">Server</span>
+                    <span class="scard-value" id="scardServerVal">Đang kết nối...</span>
+                </div>
+                <div class="scard-dot" id="scardServerDot"></div>
+            </div>
+            <!-- Card: Socket.IO -->
+            <div class="status-card-item" id="scardSocket">
+                <div class="scard-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"></path><path d="M1.42 9a16 16 0 0 1 21.16 0"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><line x1="12" y1="20" x2="12.01" y2="20"></line></svg>
+                </div>
+                <div class="scard-body">
+                    <span class="scard-label">Socket.IO</span>
+                    <span class="scard-value" id="scardSocketVal">Chưa kết nối</span>
+                </div>
+                <div class="scard-dot" id="scardSocketDot"></div>
+            </div>
+        </div>
+        <!-- END STATUS CARDS BAR -->
 
         <div class="content-wrapper">
 
@@ -98,7 +158,6 @@
 
             <!-- Browser warning -->
             <div id="browserWarning" class="browser-warning" hidden>
-                <!-- fa-exclamation-triangle -->
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
                 Phòng thu yêu cầu <strong>Chrome hoặc Edge</strong>. Vui lòng đổi trình duyệt.
             </div>
@@ -108,18 +167,38 @@
                     <div class="studio-title-row">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
                         <span>PHÒNG THU THỜI GIAN THỰC</span>
-                        <span class="engine-badge">Wav2Vec2 &middot; vi-VN</span>
+                        <span class="engine-badge" id="engineBadge">🌐 Browser · vi-VN</span>
                     </div>
                     <div class="studio-badges">
                         <span class="badge gpu-badge" id="gpuBadge">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect></svg>
                             <span id="gpuBadgeText">CPU</span>
                         </span>
-                        <span class="badge gemini-badge">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"></path><path d="m14 7 3 3"></path><path d="M5 6v4"></path><path d="M19 14v4"></path><path d="M10 2v2"></path><path d="M7 8H3"></path><path d="M21 16h-4"></path><path d="M11 3H9"></path></svg>
-                            Gemini
+                        <span class="badge gemini-badge" id="geminiStatusBadge">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"></path></svg>
+                            AI Assistant
                         </span>
                     </div>
+                </div>
+
+                <!-- UPGRADE 2025: Live Mode Selector -->
+                <div class="live-mode-selector" id="liveModeSelector">
+                    <button class="mode-pill active" id="modeBrowserBtn" data-mode="browser">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                        Browser Live Mode
+                        <span class="mode-pill-badge">Mặc định</span>
+                    </button>
+                    <button class="mode-pill" id="modeWav2VecBtn" data-mode="wav2vec2">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
+                        Local Wav2Vec2
+                        <span class="mode-pill-badge research">Nghiên cứu</span>
+                    </button>
+                </div>
+                <!-- Mode description -->
+                <div class="mode-description" id="modeDescription">
+                    <span id="modeDescText">
+                        🌐 <strong>Browser Live Mode</strong> — Nhận dạng nhanh, thời gian thực qua Web Speech API. Phù hợp demo trực tiếp.
+                    </span>
                 </div>
 
                 <!-- Speaker Wizard -->
@@ -185,8 +264,10 @@
                         <button class="btn-icon" id="exportTxtBtn" title="Xuất .txt">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                         </button>
-                        <button class="btn-ai-summary" id="summarizeBtn">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"></path></svg> Tóm tắt Gemini
+                        <!-- UPGRADE 2025: Gemini button — disabled during recording -->
+                        <button class="btn-ai-summary" id="summarizeBtn" disabled title="Chỉ dùng sau khi dừng ghi âm">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"></path></svg>
+                            Tóm tắt AI
                         </button>
                     </div>
                 </div>
@@ -194,7 +275,7 @@
                 <!-- Meta bar -->
                 <div class="rec-meta-bar">
                     <span>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> 
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                         <span id="recordingTimer">00:00</span>
                     </span>
                     <span>
@@ -202,6 +283,8 @@
                         <span id="wordCount">0</span> từ
                     </span>
                     <span class="rec-status" id="recStatusText">Sẵn sàng</span>
+                    <!-- UPGRADE 2025: Latency badge -->
+                    <span class="latency-badge" id="latencyBadge" hidden></span>
                 </div>
 
                 <!-- Mode selector -->
@@ -217,13 +300,39 @@
 
                 <!-- Transcript -->
                 <div class="transcript-panel">
+                    <!-- UPGRADE 2025: Interim box -->
+                    <div class="interim-box" id="interimBox">
+                        <span class="interim-label">Đang nhận dạng...</span>
+                        <span id="interimResult" class="interim-text"></span>
+                    </div>
                     <div class="transcript-area" id="transcriptArea">
                         <div id="speakerLines" class="speaker-lines"></div>
-                        <div class="interim-line">
-                            <span id="interimResult" class="interim-text"></span>
-                        </div>
                     </div>
                     <div id="recSpeakerLegend" class="speaker-legend" hidden></div>
+                </div>
+
+                <!-- UPGRADE 2025: Keywords panel (recording) -->
+                <div class="keywords-panel" id="recKeywordsPanel" hidden>
+                    <span class="keywords-label">Từ khóa:</span>
+                    <div class="keywords-list" id="recKeywordsList"></div>
+                </div>
+
+                <!-- UPGRADE 2025: Inline summary area (recording) -->
+                <div class="inline-summary-area" id="recSummaryArea" hidden>
+                    <div class="inline-summary-header">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"></path></svg>
+                        Kết quả AI Assistant
+                        <span class="summary-model-badge" id="recSummaryModel"></span>
+                    </div>
+                    <div class="inline-summary-body" id="recSummaryBody"></div>
+                    <div class="inline-summary-actions">
+                        <button class="btn-icon" id="recCopySummaryBtn" title="Sao chép tóm tắt">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        </button>
+                        <button class="btn-icon" id="recDownloadSummaryBtn" title="Tải xuống tóm tắt">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        </button>
+                    </div>
                 </div>
             </div>
         </section>
@@ -237,7 +346,11 @@
                     </span>
                     <h3>Kéo thả file âm thanh vào đây</h3>
                     <p>Hỗ trợ: WAV, MP3, FLAC, M4A, OGG, MP4, AAC, WMA &middot; Tối đa 500MB</p>
-                    
+                    <p class="upload-model-note">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
+                        Sử dụng mô hình <strong>Wav2Vec2 fine-tuned</strong> — Chế độ nghiên cứu
+                    </p>
+
                     <div class="file-format-badges">
                         <span class="format-chip">WAV</span>
                         <span class="format-chip">MP3</span>
@@ -250,9 +363,10 @@
                         Chọn File
                     </button>
                     <input type="file" id="fileInput" hidden accept=".wav,.mp3,.flac,.m4a,.ogg,.mp4,.aac,.wma,.opus">
-                    
+                    <audio id="audioPreview" controls style="display:none; margin-top:12px; width:100%;"></audio>
+
                     <textarea id="groundTruthInput" class="upload-ground-truth" placeholder="Ground truth (tùy chọn) để tính WER..."></textarea>
-                    
+
                     <div class="upload-diarization-controls">
                         <label class="toggle-switch">
                             <input type="checkbox" id="enableDiarization" checked>
@@ -297,28 +411,38 @@
                         Kết Quả Nhận Dạng
                     </h3>
                     <div class="panel-actions">
-                        <button class="btn-icon" id="uploadCopyBtn" title="Sao chép">
+                        <button class="btn-icon" id="uploadCopyBtn" title="Sao chép transcript">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                         </button>
                         <button class="btn-icon" id="uploadClearBtn" title="Xóa">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                         </button>
-                        <button class="btn-icon" id="uploadDownloadBtn" title="Tải xuống">
+                        <button class="btn-icon" id="uploadDownloadBtn" title="Tải xuống transcript">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        </button>
+                        <!-- UPGRADE 2025: Download summary separately -->
+                        <button class="btn-icon" id="uploadDownloadSummaryBtn" title="Tải xuống tóm tắt" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
                         </button>
                         <button class="btn-ai-summary" id="uploadSummarizeBtn">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"></path></svg> Tóm tắt
                         </button>
                     </div>
                 </div>
+
+                <!-- UPGRADE 2025: Tabs with Segments + Dialogue views -->
                 <div class="tabs-container">
                     <div class="tabs-header">
-                        <button class="tab-btn active" data-target="upload-tab-plain">Văn bản thuần</button>
+                        <button class="tab-btn active" data-target="upload-tab-segments">Văn bản</button>
                         <button class="tab-btn" data-target="upload-tab-dialogue">Hội thoại</button>
                     </div>
                     <div class="tabs-body">
-                        <div class="tab-content active" id="upload-tab-plain">
-                            <div class="transcription-editor">
+                        <!-- UPGRADE 2025: Segment view with timestamps -->
+                        <div class="tab-content active" id="upload-tab-segments">
+                            <!-- Segment list (timestamps) -->
+                            <div id="uploadSegmentList" class="segment-list"></div>
+                            <!-- Fallback plain text (hidden when segments available) -->
+                            <div class="transcription-editor" id="uploadPlainEditor" hidden>
                                 <div id="uploadFinalResult" class="final-text" contenteditable="true" data-placeholder="Văn bản nhận dạng sẽ hiển thị tại đây..."></div>
                             </div>
                         </div>
@@ -329,6 +453,8 @@
                 </div>
                 <div id="speakerLegend" class="speaker-legend" hidden></div>
                 <div id="speakerStatsGrid" class="speaker-stats-grid" hidden></div>
+
+                <!-- Result meta row -->
                 <div class="result-meta">
                     <span>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
@@ -346,6 +472,21 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
                         <span id="uploadWerText">WER: &mdash;</span>
                     </span>
+                </div>
+
+                <!-- UPGRADE 2025: Inline summary panel (upload) -->
+                <div class="inline-summary-area" id="uploadSummaryArea" hidden>
+                    <div class="inline-summary-header">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"></path></svg>
+                        Tóm Tắt AI
+                        <span class="summary-model-badge" id="uploadSummaryModel"></span>
+                    </div>
+                    <div class="inline-summary-body" id="uploadSummaryBody"></div>
+                    <!-- UPGRADE 2025: Keywords panel (upload) -->
+                    <div class="keywords-panel" id="uploadKeywordsPanel" hidden>
+                        <span class="keywords-label">Từ khóa:</span>
+                        <div class="keywords-list" id="uploadKeywordsList"></div>
+                    </div>
                 </div>
             </div>
             <div class="file-list" id="uploadFileList"></div>
@@ -380,6 +521,36 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                     Cài Đặt
                 </h3>
+
+                <!-- UPGRADE 2025: Demo Mode toggle -->
+                <div class="settings-group-card demo-mode-card">
+                    <div class="settings-group-header">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+                        <span>Chế Độ Demo</span>
+                    </div>
+                    <div class="setting-group">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="demoModeCheck">
+                            <span class="slider"></span>
+                            <span class="label-text">
+                                <strong>Demo Mode</strong> — Nút lớn hơn, ít thông tin kỹ thuật, phù hợp chia sẻ màn hình
+                            </span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="settings-divider"></div>
+
+                <!-- Live Mode default -->
+                <div class="setting-group">
+                    <label>Chế độ Live mặc định</label>
+                    <select id="defaultLiveModeSelect" class="form-select">
+                        <option value="browser">🌐 Browser Live Mode (khuyến nghị)</option>
+                        <option value="wav2vec2">🤖 Local Wav2Vec2 (Nghiên cứu)</option>
+                    </select>
+                    <small class="setting-note">Browser Live Mode = nhanh, dùng Web Speech API. Wav2Vec2 = mô hình nghiên cứu, chậm hơn trên CPU.</small>
+                </div>
+
                 <div class="setting-group">
                     <label>Microphone</label>
                     <select id="micSelect" class="form-select">
@@ -423,7 +594,7 @@
                     <label class="toggle-switch">
                         <input type="checkbox" id="ppUseLLM">
                         <span class="slider"></span>
-                        <span class="label-text">Chỉnh sửa bằng AI (Gemini)</span>
+                        <span class="label-text">Chỉnh sửa bằng AI Assistant</span>
                     </label>
                 </div>
             </div>
@@ -434,8 +605,7 @@
 </div><!-- end app-container -->
 
 
-
-<!-- ===== SUMMARY MODAL ===== -->
+<!-- ===== SUMMARY MODAL (kept for backward compat) ===== -->
 <div id="summaryModal" class="summary-modal" hidden>
     <div class="summary-modal-content">
         <div class="summary-modal-header">
@@ -466,8 +636,7 @@
 <!-- ===== TOAST ===== -->
 <div id="toastContainer" class="toast-container"></div>
 
-<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-<!-- Đã loại bỏ icons.js do sử dụng SVG trực tiếp -->
+<script src="{{ url_for('static', filename='js/socket.io.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/speaker_profile.js') }}"></script>
 <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>

@@ -14,6 +14,84 @@ const BASE_URL = window.VIETASR_BASE_URL || '';
 const $ = id => document.getElementById(id);
 const $$ = s => document.querySelectorAll(s);
 
+function supportsMediaDevices() {
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+}
+
+function supportsSpeechRecognition() {
+    return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function cleanKeyword(keyword) {
+    if (!keyword) return '';
+    return keyword.replace(/[*#`_]/g, '').trim();
+}
+
+function formatAISummary(text) {
+    if (!text) return '';
+    
+    // 1. Escape HTML to prevent XSS
+    let escaped = text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+        
+    // 2. Convert **text** to <strong>text</strong>
+    escaped = escaped.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    
+    // 3. Convert `code` to <code>code</code>
+    escaped = escaped.replace(/`(.*?)`/g, '<code>$1</code>');
+    
+    // 4. Convert * text or - text to list items, and handle headings
+    const lines = escaped.split('\n');
+    let inList = false;
+    const formattedLines = [];
+    
+    lines.forEach(line => {
+        let trimmed = line.trim();
+        
+        // Handle headings starting with #
+        if (trimmed.startsWith('#')) {
+            if (inList) {
+                formattedLines.push('</ul>');
+                inList = false;
+            }
+            const headingText = trimmed.replace(/^#{1,6}\s*/, '').toUpperCase();
+            if (headingText) {
+                formattedLines.push(`<p><strong>${headingText}</strong></p>`);
+            }
+            return;
+        }
+        
+        if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+            if (!inList) {
+                formattedLines.push('<ul>');
+                inList = true;
+            }
+            const itemText = trimmed.substring(2);
+            formattedLines.push(`<li>${itemText}</li>`);
+        } else {
+            if (inList) {
+                formattedLines.push('</ul>');
+                inList = false;
+            }
+            if (trimmed) {
+                formattedLines.push(`<p>${trimmed}</p>`);
+            } else {
+                formattedLines.push('<br>');
+            }
+        }
+    });
+    
+    if (inList) {
+        formattedLines.push('</ul>');
+    }
+    
+    return formattedLines.join('\n');
+}
+
 const ICONS = {
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
     error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
@@ -116,24 +194,104 @@ function initTabs(){
     }));
 }
 
+// ===== FETCH WITH TIMEOUT UTILITY =====
+async function fetchWithTimeout(resource, options = {}) {
+    const { timeout = 5000 } = options;
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch(resource, {
+            ...options,
+            signal: controller.signal
+        });
+        clearTimeout(id);
+        return response;
+    } catch (error) {
+        clearTimeout(id);
+        throw error;
+    }
+}
+
 // ===== MODEL STATUS =====
 async function checkModelStatus(){
     try{
-        const r=await fetch(`${BASE_URL}/api/status`);
+        const r=await fetchWithTimeout(`${BASE_URL}/api/status`, { timeout: 5000 });
         const d=await r.json();
         const ind=$('modelStatusIndicator'),txt=$('modelStatusText'),
               dev=$('deviceInfoText'),gpu=$('gpuBadge');
-        if(d.model_loaded){
-            if(ind){ind.classList.remove('status-offline');ind.classList.add('status-online');}
+        
+        let label = 'Chưa tải';
+        let status = 'idle';
+        
+        if (d.status === 'ready') {
+            label = 'Sẵn sàng';
+            status = 'ok';
+        } else if (d.status === 'loading') {
+            label = 'Đang tải...';
+            status = 'warn';
+        } else if (d.status === 'error') {
+            label = 'Lỗi model';
+            status = 'err';
+        }
+        
+        // Sidebar indicators
+        if (d.status === 'ready') {
+            if(ind){ind.className='status-indicator status-online';}
             if(txt) txt.textContent='Sẵn sàng';
             if(dev) dev.textContent=d.device||'CPU';
-            if(gpu){gpu.querySelector('span').textContent=d.device||'CPU';
-                if(d.device&&d.device.includes('cuda'))gpu.classList.add('active-gpu');}
+            if(gpu){
+                const span = gpu.querySelector('span');
+                if (span) span.textContent=d.device||'CPU';
+                if(d.device&&d.device.toLowerCase().includes('cuda')) gpu.classList.add('active-gpu');
+            }
+        } else if (d.status === 'loading') {
+            if(ind){ind.className='status-indicator status-warning';}
+            if(txt) txt.textContent='Đang tải...';
         } else {
-            if(ind){ind.classList.remove('status-online');ind.classList.add('status-offline');}
-            if(txt) txt.textContent='Chưa tải';
+            if(ind){ind.className='status-indicator status-offline';}
+            if(txt) txt.textContent=d.status === 'error' ? 'Lỗi model' : 'Chưa tải';
         }
-    }catch(e){console.warn('Status check failed:',e);}
+        
+        // Main status card
+        setScardStatus('scardModel', label, status, 'scardModelDot');
+        
+        // Handle Wav2Vec2 button state on the UI
+        const wav2vecBtn = $('modeWav2VecBtn');
+        if (wav2vecBtn) {
+            const badge = wav2vecBtn.querySelector('.mode-pill-badge');
+            if (d.status === 'loading') {
+                if (badge) {
+                    badge.textContent = 'Đang tải...';
+                    badge.className = 'mode-pill-badge research warning';
+                }
+                // Show custom status if currently in wav2vec2 mode
+                if (window._currentLiveMode === 'wav2vec2') {
+                    const descText = $('modeDescText');
+                    if (descText) descText.innerHTML = '🤖 <strong>Local Wav2Vec2 Mode</strong> — Mô hình đang được tải ở chế độ nền, vui lòng chờ...';
+                }
+            } else if (d.status === 'ready') {
+                if (badge) {
+                    badge.textContent = 'Nghiên cứu';
+                    badge.className = 'mode-pill-badge research';
+                }
+                if (window._currentLiveMode === 'wav2vec2') {
+                    const descText = $('modeDescText');
+                    if (descText) descText.innerHTML = '🤖 <strong>Local Wav2Vec2 Mode</strong> — Chậm hơn khi chạy CPU. Dùng để minh họa mô hình nghiên cứu Wav2Vec2 fine-tuned.';
+                }
+            } else if (d.status === 'error') {
+                if (badge) {
+                    badge.textContent = 'Lỗi model';
+                    badge.className = 'mode-pill-badge research error';
+                }
+            }
+        }
+    }catch(e){
+        console.warn('Status check failed:',e);
+        const ind=$('modelStatusIndicator'),txt=$('modelStatusText');
+        if(ind) ind.className='status-indicator status-offline';
+        if(txt) txt.textContent='Lỗi kết nối';
+        setScardStatus('scardModel', 'Lỗi kết nối', 'err', 'scardModelDot');
+    }
 }
 
 // ===== SUMMARY MODAL =====
@@ -142,8 +300,26 @@ function showSummaryModal(text){
     if(m) m.hidden=false;
     if(b) b.innerHTML=`<div style="white-space:pre-wrap;line-height:1.7">${text}</div>`;
 }
-async function callSummarize(text, mode, sourceInfo){
+
+/**
+ * @function callSummarize
+ * @description Gọi API tóm tắt, hiển thị kết quả vào modal
+ * @param {string} text Nội dung transcript cần tóm tắt
+ * @param {string} mode Chế độ tóm tắt
+ * @param {object} sourceInfo Thông tin nguồn (dùng để lưu lịch sử)
+ * @param {HTMLButtonElement|null} triggerBtn Nút đã bấm (sẽ bị disable trong khi xử lý)
+ */
+async function callSummarize(text, mode, sourceInfo, triggerBtn){
     if(!text||!text.trim()){showToast('Chưa có nội dung để tóm tắt','warning');return;}
+
+    // Vô hiệu hóa nút để tránh spam double-click
+    if(triggerBtn){
+        if(triggerBtn.disabled) return; // Đang xử lý, bỏ qua
+        triggerBtn.disabled = true;
+        triggerBtn._origText = triggerBtn.innerHTML;
+        triggerBtn.innerHTML = 'Đang xử lý...';
+    }
+
     const m=$('summaryModal'),b=$('summaryModalBody');
     if(m) m.hidden=false;
     if(b) b.innerHTML='<div class="loading-placeholder"><svg class="shimmer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg><br>Đang phân tích...</div>';
@@ -154,18 +330,45 @@ async function callSummarize(text, mode, sourceInfo){
             body:JSON.stringify({text,mode:mode||'summary'})
         });
         const d=await r.json();
-        if(d.success) {
-            showSummaryModal(d.text);
+
+        if(d.success && d.summary) {
+            // Hiển thị thông tin model và số chunk nếu có
+            let metaHtml = '';
+            if(d.model || d.chunks_count > 1){
+                const modelLabel = d.model ? `🤖 ${d.model}` : '';
+                const chunkLabel = d.chunks_count > 1 ? `📦 ${d.chunks_count} phần` : '';
+                metaHtml = `<div style="font-size:0.78em;opacity:0.6;margin-bottom:10px">${[modelLabel,chunkLabel].filter(Boolean).join(' · ')}</div>`;
+            }
+            showSummaryModal(metaHtml + formatAISummary(d.summary));
             if (sourceInfo) {
                 saveSummaryHistory({
-                    summary: d.text,
+                    summary: d.summary,
                     summaryMode: mode || 'summary',
                     source: sourceInfo
                 });
             }
+        } else if(d.summary_error === 'no_api_key') {
+            if(b) b.innerHTML='<div style="color:var(--warning-color,#f59e0b)">&#9888; GEMINI_API_KEY chưa được cấu hình. Mở file <code>.env</code> và thêm API key.</div>';
+        } else if(d.summary_error === 'rate_limit_429') {
+            if(b) b.innerHTML='<div style="color:var(--warning-color,#f59e0b)">&#9203; Gemini API đang quá tải (429 Rate Limit). Vui lòng thử lại sau vài phút.</div>';
+        } else if(d.summary_error === 'forbidden_403') {
+            if(b) b.innerHTML='<div style="color:var(--error-color,#ef4444)">&#128683; API key bị từ chối quyền truy cập (403 Forbidden). Kiểm tra lại GEMINI_API_KEY trong file .env.</div>';
+        } else if(d.summary_error === 'timeout') {
+            if(b) b.innerHTML='<div style="color:var(--warning-color,#f59e0b)">&#8987; Gemini phản hồi quá chậm (Timeout). Thử lại sau ít phút.</div>';
+        } else if(d.summary_error === 'gemini_client_unavailable') {
+            if(b) b.innerHTML='<div style="color:var(--error-color,#ef4444)">&#9888; Thư viện google-genai chưa cài. Chạy: <code>pip install google-genai</code></div>';
+        } else {
+            if(b) b.innerHTML=`<div style="color:var(--error-color,#ef4444)">${d.error||'Lỗi tóm tắt không xác định'}</div>`;
         }
-        else {if(b) b.innerHTML=`<div style="color:red">${d.error||'Lỗi tóm tắt'}</div>`;}
-    }catch(e){if(b) b.innerHTML='<div style="color:red">Lỗi kết nối server</div>';}
+    }catch(e){
+        if(b) b.innerHTML='<div style="color:var(--error-color,#ef4444)">Lỗi kết nối server</div>';
+    } finally {
+        // Khôi phục nút sau khi hoàn thành (dù thành công hay thất bại)
+        if(triggerBtn){
+            triggerBtn.disabled = false;
+            if(triggerBtn._origText) triggerBtn.innerHTML = triggerBtn._origText;
+        }
+    }
 }
 
 // ===== VISUALIZER =====
@@ -242,6 +445,62 @@ class VietASRRecorder {
                     /* Also fix the full finalTranscript */
                     this.finalTranscript = this.speakerLines.map(l=>l.text).join(' ');
                     this._renderLines();
+                }
+            });
+            this._socket.on('transcript_update', (data)=>{
+                if (window._currentLiveMode !== 'wav2vec2') return;
+                console.log("[ASR-Update] Interim/Final received:", data);
+                
+                const ir = $('interimResult');
+                const labelEl = document.querySelector('#interimBox .interim-label');
+                
+                if (labelEl && data.status_message) {
+                    labelEl.textContent = data.status_message;
+                }
+                
+                if (data.is_final) {
+                    if (ir) ir.textContent = '';
+                    
+                    if (data.text) {
+                        const newSegment = data.text.trim();
+                        const lastLine = this.speakerLines.length > 0 ? this.speakerLines[this.speakerLines.length - 1].text.trim() : '';
+                        if (newSegment && newSegment.toLowerCase() !== lastLine.toLowerCase()) {
+                            this.finalTranscript = data.full_text;
+                            
+                            // Word count speed guard check
+                            const words = this.finalTranscript.trim().split(/\s+/).filter(w=>w).length;
+                            const elapsedSec = (this.totalTimeMs + (this.lastStartTime ? Date.now() - this.lastStartTime : 0)) / 1000;
+                            if (elapsedSec > 2 && words / elapsedSec > 15) {
+                                console.warn('[Guard] Final transcript growth rate is abnormally high:', words / elapsedSec, 'words/sec');
+                                showToast('Cảnh báo: Tốc độ nhận dạng bất thường. Vui lòng kiểm tra lại thiết bị thu âm.', 'warning');
+                                this.stop();
+                                return;
+                            }
+                            
+                            this.speakerLines.push({
+                                text: newSegment,
+                                speaker: '',
+                                label: '',
+                                color: '',
+                                time: elapsedSec
+                            });
+                            this._renderLines();
+                        }
+                    }
+                    this._updateMeta();
+                    
+                } else {
+                    if (data.text && data.text.trim()) {
+                        if (ir) ir.textContent = data.text.trim();
+                    } else if (ir) {
+                        ir.textContent = '';
+                    }
+                }
+                
+                const latencyBadge = $('latencyBadge');
+                if (latencyBadge && data.latency) {
+                    latencyBadge.textContent = `${data.latency}ms`;
+                    latencyBadge.hidden = false;
                 }
             });
         } catch(e){
@@ -335,10 +594,21 @@ class VietASRRecorder {
             const div=document.createElement('div');
             div.className='speaker-line';
             if(l.color) div.style.borderLeftColor=l.color;
-            const meta=l.label?`<div class="speaker-line-meta">
-                <span class="speaker-badge" style="background:${l.color}">${l.label}</span>
-                <span class="timestamp">${formatTime(l.time)}</span>
-            </div>`:'';
+            
+            let meta = '';
+            const timeStr = formatTime(l.time);
+            
+            if (l.label) {
+                meta = `<div class="speaker-line-meta">
+                    <span class="speaker-badge" style="background:${l.color}">${l.label}</span>
+                    <span class="timestamp">${timeStr}</span>
+                </div>`;
+            } else {
+                meta = `<div class="speaker-line-meta">
+                    <span class="timestamp" style="margin-left: 0;">[${timeStr}]</span>
+                </div>`;
+            }
+            
             div.innerHTML=meta+`<div class="speaker-line-text">${l.text}</div>`;
             c.appendChild(div);
         });
@@ -357,12 +627,32 @@ class VietASRRecorder {
      */
     async start(){
         if(this.isRecording) return;
+        
+        const mode = window._currentLiveMode || 'browser';
+        if (mode === 'wav2vec2') {
+            const modelStatus = $('scardModelVal') ? $('scardModelVal').textContent : '';
+            if (modelStatus !== 'Sẵn sàng') {
+                showToast('Mô hình Wav2Vec2 chưa sẵn sàng. Vui lòng chờ model tải xong hoặc chọn Browser Live Mode.', 'warning');
+                return;
+            }
+            await this.startLocalWav2VecMode();
+        } else {
+            await this.startBrowserLiveMode();
+        }
+    }
+
+    async startBrowserLiveMode(){
+        console.log("[ASR-State] Start Browser Live Mode");
         if(!this._initRecognition()){
-            $('browserWarning').hidden=false;
+            const bw=$('browserWarning');
+            if(bw) {
+                bw.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> Trình duyệt này không hỗ trợ Browser Live Mode. Hãy dùng Microsoft Edge/Chrome hoặc chuyển sang Local Wav2Vec2 Mode. <br><small>Để có hỗ trợ microphone tốt nhất, hãy mở ứng dụng tại http://127.0.0.1:5000 bằng trình duyệt Chrome hoặc Microsoft Edge.</small>';
+                bw.hidden=false;
+            }
             return;
         }
+        
         try{
-            this.mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
             this.recognition.start();
             this.isRecording=true; this.isPaused=false;
             this._isRestarting=false;
@@ -371,18 +661,91 @@ class VietASRRecorder {
             $('startRecordBtn').classList.add('recording');
             $('pauseRecordBtn').hidden=false;
             $('stopRecordBtn').disabled=false;
-            const rs=$('recStatusText'); if(rs) rs.textContent='Đang ghi âm...';
+            const rs=$('recStatusText'); if(rs) rs.textContent='Đang ghi âm (Browser)...';
             this._startTimer();
-            /* FIX: Resume AudioContext if browser suspended it (autoplay policy) */
-            if(this._socket && this._socket.io && this._socket.io.opts) {
-                // socket already init'd — no-op
+            showToast('Bắt đầu ghi âm (Browser Live Mode)','success');
+        }catch(e){
+            console.error('[BrowserSpeech] Failed to start recognition:', e);
+            showToast('Không thể khởi chạy nhận dạng giọng nói: '+e.message,'error');
+            return;
+        }
+
+        // Tự động mở microphone cho visualizer & speaker detection (chỉ là tùy chọn)
+        if (supportsMediaDevices()) {
+            if (this.mediaStream) {
+                initVisualizer(this.mediaStream);
+                this._startSpeakerDetection();
+            } else {
+                try{
+                    this.mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
+                    initVisualizer(this.mediaStream);
+                    this._startSpeakerDetection();
+                }catch(e){
+                    console.warn('[BrowserSpeech] Visualizer/Speaker detection optional features disabled:', e);
+                    showToast('Tính năng sóng âm tắt (thiếu quyền microphone).','warning');
+                }
             }
+        } else {
+            console.warn('[BrowserSpeech] navigator.mediaDevices.getUserMedia is not supported on this context/browser.');
+        }
+    }
+
+    async startLocalWav2VecMode(){
+        console.log("[ASR-State] Start Local Wav2Vec2 Mode");
+        if (!supportsMediaDevices()) {
+            showToast('Trình duyệt không hỗ trợ microphone API hoặc quyền mic bị chặn.','error');
+            return;
+        }
+        
+        // Initialize status label
+        const labelEl = document.querySelector('#interimBox .interim-label');
+        if (labelEl) labelEl.textContent = "Đang nhận dạng...";
+        
+        try{
+            if (!this.mediaStream) {
+                this.mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
+            }
+            
+            if (!this._socket || !this._socket.connected) {
+                this._initSocket();
+            }
+            
+            this.isRecording=true; this.isPaused=false;
+            this.totalTimeMs=0;
+            this.lastStartTime=Date.now();
+            $('startRecordBtn').classList.add('recording');
+            $('pauseRecordBtn').hidden=false;
+            $('stopRecordBtn').disabled=false;
+            const rs=$('recStatusText'); if(rs) rs.textContent='Đang ghi âm (Wav2Vec2)...';
+            this._startTimer();
             initVisualizer(this.mediaStream);
             this._startSpeakerDetection();
-            showToast('Bắt đầu ghi âm','success');
+            
+            // Web Audio API context at 16000Hz
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            this.audioCtx = new AudioContextClass({ sampleRate: 16000 });
+            this.audioSource = this.audioCtx.createMediaStreamSource(this.mediaStream);
+            this.processorNode = this.audioCtx.createScriptProcessor(4096, 1, 1);
+            
+            this.audioSource.connect(this.processorNode);
+            this.processorNode.connect(this.audioCtx.destination);
+            
+            this.processorNode.onaudioprocess = (e) => {
+                if (!this.isRecording || this.isPaused) return;
+                const inputData = e.inputBuffer.getChannelData(0);
+                if (this._socket && this._socket.connected) {
+                    this._socket.emit('audio_chunk', inputData.buffer);
+                }
+            };
+            
+            showToast('Bắt đầu ghi âm (Local Wav2Vec2)','success');
         }catch(e){
-            console.error('[VietASR-RT] Microphone access error:', e);
-            showToast('Không thể truy cập microphone: '+e.message,'error');
+            console.error('[VietASR-RT] Wav2Vec2 start error:', e);
+            if (e.name === 'NotAllowedError' || e.message.includes('Permission')) {
+                showToast('Microphone đang bị chặn. Vui lòng bật quyền microphone cho 127.0.0.1:5000 hoặc localhost.','error');
+            } else {
+                showToast('Không thể mở microphone: '+e.message,'error');
+            }
         }
     }
 
@@ -396,8 +759,12 @@ class VietASRRecorder {
         if(!this.isRecording) return;
         this.isPaused=!this.isPaused;
         const btn=$('pauseRecordBtn');
+        const mode = window._currentLiveMode || 'browser';
+        
         if(this.isPaused){
-            try{this.recognition.stop();}catch(e){}
+            if (mode === 'browser') {
+                try{this.recognition.stop();}catch(e){}
+            }
             if(btn) btn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
             $('startRecordBtn').classList.remove('recording');
             if(this.lastStartTime){
@@ -409,9 +776,11 @@ class VietASRRecorder {
             this._stopSpeakerDetection();
             const rs=$('recStatusText'); if(rs) rs.textContent='Tạm dừng';
         } else {
-            try{this.recognition.start();}catch(e){
-                this._initRecognition();
-                try{this.recognition.start();}catch(err){}
+            if (mode === 'browser') {
+                try{this.recognition.start();}catch(e){
+                    this._initRecognition();
+                    try{this.recognition.start();}catch(err){}
+                }
             }
             if(btn) btn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>';
             $('startRecordBtn').classList.add('recording');
@@ -419,17 +788,43 @@ class VietASRRecorder {
             this._startTimer();
             initVisualizer(this.mediaStream);
             this._startSpeakerDetection();
-            const rs=$('recStatusText'); if(rs) rs.textContent='Đang ghi âm...';
+            const rs=$('recStatusText'); if(rs) rs.textContent = mode === 'browser' ? 'Đang ghi âm (Browser)...' : 'Đang ghi âm (Wav2Vec2)...';
         }
     }
 
     stop(){
+        console.log("[ASR-State] Stop Recording");
         this.isRecording=false; this.isPaused=false;
-        /* FIX: Clear restart flag and timeout before stopping to prevent ghost restart */
-        this._isRestarting=true;
-        clearTimeout(this._autoRestart);
-        try{this.recognition.stop();}catch(e){}
-        this._isRestarting=false;
+        const mode = window._currentLiveMode || 'browser';
+        
+        if (mode === 'browser') {
+            /* FIX: Clear restart flag and timeout before stopping to prevent ghost restart */
+            this._isRestarting=true;
+            clearTimeout(this._autoRestart);
+            try{this.recognition.stop();}catch(e){}
+            this._isRestarting=false;
+        } else {
+            // Local Wav2Vec2 Mode: emit stop_recording event to the backend so it commits remaining audio
+            console.log("[ASR-State] Emitting stop_recording to server.");
+            if (this._socket && this._socket.connected) {
+                this._socket.emit('stop_recording');
+            }
+            
+            // Clean up nodes
+            if (this.processorNode) {
+                this.processorNode.disconnect();
+                this.processorNode = null;
+            }
+            if (this.audioSource) {
+                this.audioSource.disconnect();
+                this.audioSource = null;
+            }
+            if (this.audioCtx) {
+                this.audioCtx.close();
+                this.audioCtx = null;
+            }
+        }
+        
         if(this.lastStartTime){
             this.totalTimeMs += Date.now() - this.lastStartTime;
             this.lastStartTime = null;
@@ -443,7 +838,11 @@ class VietASRRecorder {
         const pBtn = $('pauseRecordBtn');
         if(pBtn) pBtn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>';
         $('stopRecordBtn').disabled=true;
+        
+        // Reset interim Result to empty
         const ir=$('interimResult'); if(ir) ir.textContent='';
+        const labelEl = document.querySelector('#interimBox .interim-label');
+        if (labelEl) labelEl.textContent = "Đang nhận dạng...";
         const rs=$('recStatusText'); if(rs) rs.textContent='Sẵn sàng';
         showToast('Đã dừng ghi âm','info');
         if(this.finalTranscript.trim()) saveToHistory('recording',this.finalTranscript);
@@ -467,6 +866,10 @@ class VietASRRecorder {
     }
 
     async summarize(){
+        // Tránh spam: nếu đang xử lý thì bỏ qua
+        const btn = $('summarizeBtn');
+        if(btn && btn.disabled) return;
+
         const mode=($('smartModeSelect')||{}).value||'summary';
         const elMs = this.totalTimeMs + (this.lastStartTime ? Date.now() - this.lastStartTime : 0);
         const sourceInfo = {
@@ -477,7 +880,8 @@ class VietASRRecorder {
             wordCount: this.finalTranscript.trim().split(/\s+/).filter(w=>w).length,
             transcript: this.finalTranscript
         };
-        await callSummarize(this.finalTranscript, mode, sourceInfo);
+        // Truyền btn để tự động disable trong khi chờ
+        await callSummarize(this.finalTranscript, mode, sourceInfo, btn);
     }
 
     _startTimer(){
@@ -726,13 +1130,13 @@ function renderSummaryHistory(){
 <div class="summary-card" data-id="${item.id}">
   <div class="summary-card-header">
     <div class="summary-card-meta">
-      <span class="badge badge-ai">🤖 Gemini AI</span>
+      <span class="badge badge-ai">🤖 AI Assistant</span>
       <span class="summary-mode">${modeLabel}</span>
     </div>
     <span class="summary-time">${timeStr}</span>
   </div>
 
-  <div class="summary-content">${item.summary.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
+  <div class="summary-content">${formatAISummary(item.summary)}</div>
 
   <div class="summary-source">
     <div class="source-header">📌 Nguồn trích dẫn</div>
@@ -811,7 +1215,7 @@ function initSpeakerWizard(){
     const skip=$('skipWizardBtn');
     if(skip) skip.onclick=()=>{
         $('speakerWizard').hidden=true;
-        if(recorder.profiler) recorder.profiler.enableAutoMode(recorder.mediaStream);
+        if(recorder.profiler && recorder.mediaStream) recorder.profiler.enableAutoMode(recorder.mediaStream);
         recorder.start();
     };
     const start=$('startAfterSetup');
@@ -884,12 +1288,26 @@ async function registerWizardSpeaker(idx){
     if(card) card.classList.remove('recording-card');
 }
 
-// ===== INIT =====
 document.addEventListener('DOMContentLoaded',()=>{
-    // Check browser support
-    if(!('SpeechRecognition' in window)&&!('webkitSpeechRecognition' in window)){
-        const bw=$('browserWarning'); if(bw) bw.hidden=false;
-        const srb=$('startRecordBtn'); if(srb) srb.disabled=true;
+    // Console debug capability logging
+    console.log("[LiveMode]", window._currentLiveMode);
+    console.log("[Support] SpeechRecognition:", supportsSpeechRecognition());
+    console.log("[Support] mediaDevices:", supportsMediaDevices());
+    console.log("[SecureContext]", window.isSecureContext);
+
+    // Check browser support and security context context warning
+    const bw=$('browserWarning');
+    if(bw) {
+        if(!supportsSpeechRecognition()){
+            bw.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> Trình duyệt này không hỗ trợ Browser Live Mode. Hãy dùng Microsoft Edge/Chrome hoặc chuyển sang Local Wav2Vec2 Mode. <br><small>Để có hỗ trợ microphone tốt nhất, hãy mở ứng dụng tại http://127.0.0.1:5000 bằng trình duyệt Chrome hoặc Microsoft Edge.</small>';
+            bw.hidden=false;
+        } else if(!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'){
+            bw.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> Cảnh báo: Ứng dụng chạy ngoài ngữ cảnh bảo mật (HTTPS/localhost). Microphone có thể bị chặn. <br><small>Để có hỗ trợ microphone tốt nhất, hãy mở ứng dụng tại http://127.0.0.1:5000 bằng trình duyệt Chrome hoặc Microsoft Edge.</small>';
+            bw.hidden=false;
+        } else {
+            bw.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg> Để có hỗ trợ microphone tốt nhất, hãy mở ứng dụng tại <strong>http://127.0.0.1:5000</strong> bằng trình duyệt Chrome hoặc Microsoft Edge.';
+            bw.hidden=false;
+        }
     }
 
     initTheme();
@@ -899,6 +1317,11 @@ document.addEventListener('DOMContentLoaded',()=>{
     renderHistory();
     renderSummaryHistory();
 
+    // UPGRADE 2025: new init functions
+    initStatusCards();
+    initLiveModeSelector();
+    initDemoMode();
+
     // Navigation
     $$('.nav-item').forEach(n=>n.onclick=()=>switchTab(n.dataset.tab));
     const tt=$('themeToggle'); if(tt) tt.onclick=toggleTheme;
@@ -907,22 +1330,82 @@ document.addEventListener('DOMContentLoaded',()=>{
     const sr=$('startRecordBtn');
     if(sr) sr.onclick=async()=>{
         if(recorder.isRecording) return;
-        // Show wizard first if speaker profiler available
-        if(window.SpeakerProfiler){
-            try{
-                recorder.mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
-                $('speakerWizard').hidden=false;
-            } catch(e){ recorder.start(); }
-        } else { recorder.start(); }
+        setGeminiButtonState('recording');
+        
+        const mode = window._currentLiveMode || 'browser';
+        console.log("[StartClick] Mode:", mode);
+        
+        if (mode === 'browser') {
+            if(window.SpeakerProfiler && supportsMediaDevices()){
+                try{
+                    recorder.mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
+                    $('speakerWizard').hidden=false;
+                } catch(e){
+                    console.warn('[StartButton] Optional media stream failed for speaker wizard:', e);
+                    recorder.start();
+                }
+            } else {
+                recorder.start();
+            }
+        } else {
+            // Local Wav2Vec2 Mode: requires getUserMedia.
+            if (!supportsMediaDevices()) {
+                showToast("Trình duyệt không hỗ trợ microphone API hoặc quyền mic bị chặn.", "error");
+                return;
+            }
+            if(window.SpeakerProfiler){
+                try{
+                    recorder.mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
+                    $('speakerWizard').hidden=false;
+                } catch(e){
+                    console.error('[StartButton] Failed to get microphone for local mode:', e);
+                    if (e.name === 'NotAllowedError' || e.message.includes('Permission')) {
+                        showToast('Microphone đang bị chặn. Vui lòng bật quyền microphone cho 127.0.0.1:5000 hoặc localhost.','error');
+                    } else {
+                        showToast('Không thể mở microphone. Vui lòng kiểm tra quyền microphone trong trình duyệt và Windows Settings.', 'error');
+                    }
+                }
+            } else {
+                recorder.start();
+            }
+        }
     };
     const pr=$('pauseRecordBtn'); if(pr) pr.onclick=()=>recorder.pause();
-    const st=$('stopRecordBtn'); if(st) st.onclick=()=>recorder.stop();
+    const st=$('stopRecordBtn');
+    if(st) st.onclick=()=>{
+        recorder.stop();
+        setTimeout(()=>setGeminiButtonState('stopped'),200);
+    };
 
     // Recording actions
     const cr=$('copyResultBtn'); if(cr) cr.onclick=()=>recorder.copy();
-    const cl=$('clearResultBtn'); if(cl) cl.onclick=()=>recorder.clear();
+    const cl=$('clearResultBtn'); if(cl) cl.onclick=()=>{
+        recorder.clear();
+        // Hide summary area on clear
+        const sa=$('recSummaryArea'); if(sa) sa.hidden=true;
+        const kp=$('recKeywordsPanel'); if(kp) kp.hidden=true;
+        setGeminiButtonState('empty');
+    };
     const et=$('exportTxtBtn'); if(et) et.onclick=()=>recorder.exportTxt();
-    const sb=$('summarizeBtn'); if(sb) sb.onclick=()=>recorder.summarize();
+
+    // UPGRADE 2025: Gemini summary button (recording page) — inline display
+    const sb=$('summarizeBtn');
+    if(sb) sb.onclick=async()=>{
+        if(sb.disabled) return;
+        if(!recorder.finalTranscript.trim()){showToast('Chưa có nội dung','warning');return;}
+        const mode=($('smartModeSelect')||{}).value||'summary';
+        await callSummarizeInline(
+            recorder.finalTranscript, mode, 'recording',
+            'recSummaryArea','recSummaryBody','recSummaryModel',
+            sb
+        );
+    };
+
+    // UPGRADE 2025: Recording page — copy/download summary buttons
+    const rcs=$('recCopySummaryBtn');
+    if(rcs) rcs.onclick=()=>copyText(($('recSummaryBody')||{}).textContent||'');
+    const rds=$('recDownloadSummaryBtn');
+    if(rds) rds.onclick=()=>exportSummaryTxt('recording');
 
     // Upload
     const bf=$('browseFileBtn'),fi=$('fileInput'),dz=$('dropZone');
@@ -937,24 +1420,40 @@ document.addEventListener('DOMContentLoaded',()=>{
     if(ed) ed.onchange=()=>{const rc=$('speakerRangeControls');if(rc) rc.style.opacity=ed.checked?'1':'0.4';};
 
     // Upload actions
-    const uc=$('uploadCopyBtn'); if(uc) uc.onclick=()=>copyText(($('uploadFinalResult')||{}).textContent||'');
-    const uclr=$('uploadClearBtn'); if(uclr) uclr.onclick=()=>{$('uploadFinalResult').textContent='';$('dialogueContainer').innerHTML='';};
+    const uc=$('uploadCopyBtn');
+    if(uc) uc.onclick=()=>{
+        const text = getUploadTranscriptText();
+        copyText(text);
+    };
+    const uclr=$('uploadClearBtn'); if(uclr) uclr.onclick=()=>{
+        if($('uploadFinalResult')) $('uploadFinalResult').textContent='';
+        if($('uploadSegmentList')) $('uploadSegmentList').innerHTML='';
+        if($('dialogueContainer')) $('dialogueContainer').innerHTML='';
+        const ua=$('uploadSummaryArea'); if(ua) ua.hidden=true;
+        const uk=$('uploadKeywordsPanel'); if(uk) uk.hidden=true;
+        const uds=$('uploadDownloadSummaryBtn'); if(uds) uds.hidden=true;
+        lastUploadResult=null;
+    };
     const udl=$('uploadDownloadBtn'); if(udl) udl.onclick=exportUploadTxt;
-    const uexp=$('uploadExpandBtn'); if(uexp) uexp.onclick=()=>$('uploadResultPanel').classList.toggle('fullscreen');
-    const usm=$('uploadSummarizeBtn'); if(usm) usm.onclick=()=> {
-        const text = ($('uploadFinalResult')||{}).textContent||'';
-        const sourceInfo = {
-            type: 'upload',
-            label: lastUploadResult && lastUploadResult.filename ? lastUploadResult.filename : 'File tải lên',
-            filename: lastUploadResult ? lastUploadResult.filename : null,
-            duration: lastUploadResult ? (lastUploadResult.processing_time_seconds + 's') : 'Không xác định',
-            wordCount: text.trim().split(/\s+/).filter(w=>w).length,
-            transcript: text
-        };
-        callSummarize(text, 'summary', sourceInfo);
+
+    // UPGRADE 2025: Download summary (upload page)
+    const uds=$('uploadDownloadSummaryBtn');
+    if(uds) uds.onclick=()=>exportSummaryTxt('upload');
+
+    // UPGRADE 2025: Summarize button (upload page) — inline display
+    const usm=$('uploadSummarizeBtn');
+    if(usm) usm.onclick=()=>{
+        const text = getUploadTranscriptText();
+        if(!text){showToast('Chưa có transcript','warning');return;}
+        const mode=($('smartModeSelect')||{}).value||'summary';
+        callSummarizeInline(
+            text, mode, 'upload',
+            'uploadSummaryArea','uploadSummaryBody','uploadSummaryModel',
+            usm
+        );
     };
 
-    // Summary modal
+    // Summary modal (kept for backward compat)
     const csm=$('closeSummaryModal'); if(csm) csm.onclick=()=>{const m=$('summaryModal');if(m)m.hidden=true;};
     const csb=$('closeSummaryBtn'); if(csb) csb.onclick=()=>{const m=$('summaryModal');if(m)m.hidden=true;};
     const cps=$('copySummaryBtn'); if(cps) cps.onclick=()=>copyText(($('summaryModalBody')||{}).textContent||'');
@@ -963,6 +1462,395 @@ document.addEventListener('DOMContentLoaded',()=>{
     const ch=$('clearHistoryBtn'); if(ch) ch.onclick=()=>{localStorage.removeItem('vietasr_history');renderHistory();showToast('Đã xóa lịch sử','info');};
     const csh=$('clearSummaryHistoryBtn'); if(csh) csh.onclick=()=>{localStorage.removeItem('vietasr_summary_history');renderSummaryHistory();showToast('Đã xóa lịch sử tóm tắt','info');};
 
-    // Polling
+    // Polling — check model status every 30s
     setInterval(checkModelStatus, 30000);
+    // UPGRADE 2025: Poll config & gemini status once on load
+    setTimeout(()=>{ loadServerConfig(); checkGeminiStatus(); }, 800);
 });
+
+
+// ===================== UPGRADE 2025: STATUS CARDS =====================
+
+/**
+ * Initialises status cards polling on load.
+ * Fetches /api/config and /api/gemini-status once on DOMContentLoaded.
+ */
+function initStatusCards(){
+    setScardStatus('scardServer', 'Đang kết nối...', 'idle', '');
+    setScardStatus('scardGemini', 'Đang kiểm tra...', 'idle', 'scardGeminiDot');
+    // Set live mode from localStorage preference
+    const savedMode = localStorage.getItem('vietasr-live-mode') || 'browser';
+    updateLiveModeScard(savedMode);
+}
+
+function setScardStatus(cardId, value, status, dotId){
+    const card=$(cardId); if(!card) return;
+    card.setAttribute('data-status', status||'idle');
+    const val=card.querySelector('.scard-value'); if(val) val.textContent=value;
+    if(dotId){
+        const dot=$(dotId); if(!dot) return;
+        dot.className='scard-dot';
+        if(status==='ok') dot.classList.add('scard-dot-green');
+        else if(status==='warn') dot.classList.add('scard-dot-warn');
+        else if(status==='err') dot.classList.add('scard-dot-err');
+        else dot.style.background='var(--color-text-3)';
+    }
+}
+
+async function loadServerConfig(){
+    try{
+        const r=await fetchWithTimeout(`${BASE_URL}/api/config`, { timeout: 5000 });
+        const d=await r.json();
+        // Server card
+        setScardStatus('scardServer', `v${d.server_version||'?'}`, 'ok', 'scardServerDot');
+        // Device card
+        const dev=d.device||'cpu';
+        setScardStatus('scardDevice', dev.toUpperCase(), d.device&&d.device.toLowerCase().includes('cuda')?'ok':'idle', 'scardDeviceDot');
+        if($('deviceInfoText')) $('deviceInfoText').textContent=dev.toUpperCase();
+        if($('scardDeviceVal')) $('scardDeviceVal').textContent=dev.toUpperCase();
+        if($('gpuBadgeText')) $('gpuBadgeText').textContent=dev.toUpperCase();
+        // Default live mode from server
+        const srvMode=d.default_live_mode||'browser';
+        const userMode=localStorage.getItem('vietasr-live-mode')||srvMode;
+        applyLiveMode(userMode, false);
+        // Default live mode select in settings
+        const dlms=$('defaultLiveModeSelect');
+        if(dlms) dlms.value=userMode;
+    }catch(e){
+        console.error('Failed to load server config:', e);
+        setScardStatus('scardServer','Offline / Lỗi','err','scardServerDot');
+        setScardStatus('scardDevice','Không rõ','err','scardDeviceDot');
+        setScardStatus('scardModel','Lỗi kết nối','err','scardModelDot');
+    }
+}
+
+async function checkGeminiStatus(){
+    try{
+        const r=await fetchWithTimeout(`${BASE_URL}/api/gemini-status`, { timeout: 5000 });
+        const d=await r.json();
+        const statusMap={
+            'ready':['Sẵn sàng','ok'],
+            'disabled':['Disabled','idle'],
+            'no_key':['Chưa cấu hình','warn'],
+            'unavailable':['Không khả dụng','err'],
+        };
+        const [label,status]=statusMap[d.status]||['Không rõ','idle'];
+        setScardStatus('scardGemini', label, status, 'scardGeminiDot');
+        const gb=$('geminiStatusBadge');
+        if(gb){
+            gb.title=d.error||label;
+            if(d.status==='ready') gb.style.opacity='1';
+            else gb.style.opacity='0.5';
+        }
+    }catch(e){
+        console.error('Failed to check Gemini/AI status:', e);
+        setScardStatus('scardGemini','Lỗi kết nối','err','scardGeminiDot');
+    }
+}
+
+function updateLiveModeScard(mode){
+    const lv=mode==='browser'?'Browser Live':'Wav2Vec2';
+    setScardStatus('scardLiveMode', lv, 'ok', 'scardLiveModeDot');
+    if($('scardLiveModeVal')) $('scardLiveModeVal').textContent=lv;
+}
+
+
+// ===================== UPGRADE 2025: LIVE MODE SELECTOR =====================
+
+const MODE_DESCRIPTIONS={
+    browser:'🌐 <strong>Browser Live Mode</strong> — Nhận dạng nhanh, thời gian thực qua Web Speech API. Phù hợp demo trực tiếp.',
+    wav2vec2:'🤖 <strong>Local Wav2Vec2 Mode</strong> — Chậm hơn khi chạy CPU, dùng để minh họa mô hình nghiên cứu.'
+};
+
+function initLiveModeSelector(){
+    const browserBtn=$('modeBrowserBtn');
+    const wav2vecBtn=$('modeWav2VecBtn');
+    if(!browserBtn||!wav2vecBtn) return;
+
+    // Restore saved preference
+    const saved=localStorage.getItem('vietasr-live-mode')||'browser';
+    applyLiveMode(saved, false);
+
+    browserBtn.onclick=()=>applyLiveMode('browser', true);
+    wav2vecBtn.onclick=()=>applyLiveMode('wav2vec2', true);
+
+    // Settings page default live mode select
+    const dlms=$('defaultLiveModeSelect');
+    if(dlms){
+        dlms.value=saved;
+        dlms.onchange=()=>applyLiveMode(dlms.value, true);
+    }
+}
+
+function applyLiveMode(mode, save){
+    const browserBtn=$('modeBrowserBtn');
+    const wav2vecBtn=$('modeWav2VecBtn');
+    const descEl=$('modeDescText');
+    const engineBadge=$('engineBadge');
+
+    if(browserBtn) browserBtn.classList.toggle('active', mode==='browser');
+    if(wav2vecBtn) wav2vecBtn.classList.toggle('active', mode==='wav2vec2');
+    if(descEl) descEl.innerHTML=MODE_DESCRIPTIONS[mode]||MODE_DESCRIPTIONS.browser;
+    if(engineBadge){
+        engineBadge.textContent=mode==='browser'?'🌐 Browser · vi-VN':'🤖 Wav2Vec2 · Local';
+    }
+    updateLiveModeScard(mode);
+
+    // Update settings select if it exists
+    const dlms=$('defaultLiveModeSelect');
+    if(dlms) dlms.value=mode;
+
+    if(save) localStorage.setItem('vietasr-live-mode', mode);
+    window._currentLiveMode=mode;
+}
+
+
+// ===================== UPGRADE 2025: GEMINI BUTTON STATE MACHINE =====================
+/**
+ * States: 'recording' (disabled), 'stopped' (enabled if transcript), 'empty' (disabled), 'processing' (disabled)
+ */
+function setGeminiButtonState(state){
+    const btn=$('summarizeBtn'); if(!btn) return;
+    if(state==='recording'){
+        btn.disabled=true;
+        btn.title='Chỉ dùng sau khi dừng ghi âm';
+    } else if(state==='stopped'){
+        const hasText=recorder&&recorder.finalTranscript&&recorder.finalTranscript.trim().length>0;
+        btn.disabled=!hasText;
+        btn.title=hasText?'Tóm tắt bằng AI Assistant':'Cần có transcript trước';
+    } else if(state==='empty'){
+        btn.disabled=true;
+        btn.title='Cần có transcript trước';
+    } else if(state==='processing'){
+        btn.disabled=true;
+        btn.title='Đang xử lý...';
+    }
+}
+
+
+// ===================== UPGRADE 2025: INLINE SUMMARIZE =====================
+/**
+ * Gọi API tóm tắt và hiển thị kết quả inline trong panelAreaId.
+ * Không dùng modal — hiển thị trực tiếp trong trang.
+ * Gemini sẽ không bao giờ được gọi khi đang ghi âm.
+ */
+let _lastSummaryText = { recording: '', upload: '' };
+
+async function callSummarizeInline(text, mode, context, areaId, bodyId, modelBadgeId, triggerBtn){
+    if(!text||!text.trim()){showToast('Chưa có nội dung','warning');return;}
+
+    // GUARD: Never call Gemini during recording
+    if(recorder&&recorder.isRecording){
+        showToast('Không thể tóm tắt khi đang ghi âm','warning');
+        return;
+    }
+
+    if(triggerBtn){
+        if(triggerBtn.disabled) return;
+        triggerBtn.disabled=true;
+        triggerBtn._origText=triggerBtn.innerHTML;
+        triggerBtn.innerHTML='<svg class="shimmer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg> Đang xử lý...';
+    }
+
+    const area=$(areaId); if(area){area.hidden=false;}
+    const body=$(bodyId); if(body) body.innerHTML='<span style="opacity:0.5;font-style:italic">Đang phân tích với AI Assistant...</span>';
+    const badge=$(modelBadgeId); if(badge) badge.textContent='';
+
+    try{
+        const r=await fetch(`${BASE_URL}/api/summarize`,{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({text,mode:mode||'summary'})
+        });
+        const d=await r.json();
+
+        if(d.success&&d.summary){
+            if(body){
+                body.innerHTML=formatAISummary(d.summary);
+            }
+            if(badge&&d.model) badge.textContent=d.model;
+
+            // Extract and render keywords from summary (simple extraction)
+            _lastSummaryText[context]=d.summary;
+            renderKeywordsFromText(d.summary, context==='recording'?'recKeywordsPanel':'uploadKeywordsPanel',
+                                              context==='recording'?'recKeywordsList':'uploadKeywordsList');
+
+            // Show download summary button (upload page)
+            if(context==='upload'){
+                const uds=$('uploadDownloadSummaryBtn'); if(uds) uds.hidden=false;
+            }
+
+            // Save to summary history
+            saveSummaryHistory({
+                summary: d.summary,
+                summaryMode: mode||'summary',
+                source:{
+                    type:context,
+                    label:(context==='recording'?'Phiên ghi âm ':'File ')+new Date().toLocaleString('vi-VN'),
+                    filename:lastUploadResult?lastUploadResult.filename:null,
+                    duration:context==='recording'?formatTime((recorder.totalTimeMs||0)/1000):'—',
+                    wordCount:text.trim().split(/\s+/).filter(w=>w).length,
+                    transcript:text
+                }
+            });
+            showToast('Tóm tắt thành công','success');
+        } else {
+            const errMap={
+                'no_api_key':'⚠ GEMINI_API_KEY chưa được cấu hình trong .env',
+                'rate_limit_429':'⏳ AI Assistant API đang quá tải (429). Vui lòng thử lại sau.',
+                'forbidden_403':'🚫 API key bị từ chối (403). Kiểm tra lại GEMINI_API_KEY trong file .env.',
+                'timeout':'⌛ AI Assistant phản hồi quá chậm. Thử lại sau ít phút.',
+                'gemini_client_unavailable':'⚠ Thư viện google-genai chưa cài. Chạy: pip install google-genai',
+            };
+            const errMsg=errMap[d.summary_error]||d.error||'Lỗi tóm tắt không xác định';
+            if(body) body.innerHTML=`<span style="color:var(--color-warning)">${errMsg}</span>`;
+            showToast('Tóm tắt thất bại','error');
+        }
+    }catch(e){
+        if(body) body.innerHTML='<span style="color:var(--color-danger)">Lỗi kết nối server</span>';
+        showToast('Lỗi kết nối','error');
+    }finally{
+        if(triggerBtn){
+            triggerBtn.disabled=false;
+            if(triggerBtn._origText) triggerBtn.innerHTML=triggerBtn._origText;
+        }
+    }
+}
+
+
+// ===================== UPGRADE 2025: SEGMENT DISPLAY =====================
+/**
+ * Renders segments with timestamps [HH:MM:SS - HH:MM:SS] text
+ * Called from displayUploadResult when chunks array is available.
+ */
+function renderSegments(chunks){
+    const list=$('uploadSegmentList');
+    const plain=$('uploadPlainEditor');
+    if(!list) return;
+
+    if(!chunks||!chunks.length){
+        if(list) list.innerHTML='';
+        if(plain) plain.hidden=false;
+        return;
+    }
+
+    if(plain) plain.hidden=true;
+    list.innerHTML='';
+
+    const tsLabel=(s)=>{
+        s=Math.max(0,s||0);
+        const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60);
+        return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+    };
+
+    chunks.forEach((c,i)=>{
+        const div=document.createElement('div');
+        div.className='transcript-segment';
+        const start=c.start!=null?c.start:(i*2);
+        const end=c.end!=null?c.end:(start+2);
+        const ts=start===0&&end===0?'':`[${tsLabel(start)} – ${tsLabel(end)}]`;
+        const spkBadge=c.label?`<span class="speaker-badge" style="background:${c.color||'#666'};margin-right:6px">${c.label}</span>`:'';
+        div.innerHTML=`<span class="segment-timestamp">${ts}</span><span class="segment-text">${spkBadge}${c.text||''}</span>`;
+        list.appendChild(div);
+    });
+    // Auto scroll
+    list.scrollTop=list.scrollHeight;
+}
+
+
+// ===================== UPGRADE 2025: KEYWORDS =====================
+/**
+ * Simple keyword extraction from summary text (top nouns, >4 chars)
+ * For production, replace with backend NLP extraction.
+ */
+function renderKeywordsFromText(text, panelId, listId){
+    const panel=$(panelId), list=$(listId);
+    if(!panel||!list) return;
+    // Clean markdown first
+    const cleanText = text.replace(/[*#`_]/g, '');
+    // Tách từ > 4 ký tự, unique, loại stopwords
+    const stopwords=new Set(['không','được','những','trong','của','này','một','khi','và','các','có','cho','với','về','để','thì','là','đã','sẽ','đây','theo','như','từ','tại','nhưng','vì']);
+    const words=[...new Set(
+        cleanText.split(/\s+/)
+            .map(w=>w.replace(/[.,!?;:()"""]/g,'').toLowerCase())
+            .filter(w=>w.length>4&&!stopwords.has(w)&&/[a-zA-ZÀ-ỹ]/.test(w))
+    )].slice(0,8);
+
+    if(!words.length){panel.hidden=true;return;}
+    panel.hidden=false;
+    list.innerHTML=words.map(w=>`<span class="keyword-chip">${cleanKeyword(w)}</span>`).join('');
+}
+
+
+// ===================== UPGRADE 2025: EXPORT SUMMARY =====================
+function exportSummaryTxt(context){
+    const summaryText=_lastSummaryText[context]||'';
+    const transcriptText = context==='recording'
+        ? (recorder?recorder.finalTranscript:'')
+        : getUploadTranscriptText();
+
+    if(!summaryText&&!transcriptText){showToast('Không có nội dung để xuất','warning');return;}
+
+    const now=new Date().toLocaleString('vi-VN');
+    let content=`=== VietASR Pro — Kết Quả ===\nThời gian: ${now}\n\n`;
+    if(transcriptText) content+=`--- TRANSCRIPT ---\n${transcriptText}\n\n`;
+    if(summaryText) content+=`--- TÓM TẮT ---\n${summaryText}`;
+
+    downloadFile(content,`vietasr_${context}_${Date.now()}.txt`);
+}
+
+function getUploadTranscriptText(){
+    // Prefer segment list text if available
+    const segs=$$('.segment-text');
+    if(segs&&segs.length>0) return [...segs].map(s=>s.textContent).join('\n');
+    return ($('uploadFinalResult')||{}).textContent||'';
+}
+
+
+// ===================== UPGRADE 2025: DISPLAY UPLOAD RESULT (OVERRIDE) =====================
+/**
+ * Override/extend displayUploadResult to also render segments and show upload model note.
+ * Original function is still called for backward compat fields.
+ */
+const _origDisplayUploadResult=displayUploadResult;
+displayUploadResult=function(d){
+    // Call original for WER, word count, speaker stats, dialogue
+    _origDisplayUploadResult(d);
+
+    // UPGRADE 2025: Render segments with timestamps
+    // Try chunks > dialogue > plain text fallback
+    const chunks=(d.chunks&&d.chunks.length)?d.chunks
+        :(d.dialogue&&d.dialogue.length)?d.dialogue
+        :null;
+    renderSegments(chunks);
+
+    // Show plain text if no segments
+    if(!chunks){
+        const plain=$('uploadPlainEditor'); if(plain) plain.hidden=false;
+        const fr=$('uploadFinalResult'); if(fr) fr.textContent=d.transcription||'';
+    }
+
+    // Reset summary area
+    const ua=$('uploadSummaryArea'); if(ua) ua.hidden=true;
+    const uk=$('uploadKeywordsPanel'); if(uk) uk.hidden=true;
+    const uds=$('uploadDownloadSummaryBtn'); if(uds) uds.hidden=true;
+};
+
+
+// ===================== UPGRADE 2025: DEMO MODE =====================
+function initDemoMode(){
+    const check=$('demoModeCheck'); if(!check) return;
+    // Restore saved demo mode
+    const saved=localStorage.getItem('vietasr-demo-mode')==='true';
+    check.checked=saved;
+    applyDemoMode(saved);
+    check.onchange=()=>{
+        applyDemoMode(check.checked);
+        localStorage.setItem('vietasr-demo-mode', check.checked);
+    };
+}
+
+function applyDemoMode(on){
+    if(on) document.body.classList.add('demo-mode');
+    else document.body.classList.remove('demo-mode');
+}

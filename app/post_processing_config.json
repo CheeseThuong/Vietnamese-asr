@@ -2,12 +2,12 @@
     "pipeline": {
         "fix_duplicates": true,
         "use_dictionary": true,
-        "use_llm": true
+        "use_llm": false
     },
     "llm": {
         "provider": "gemini",
-        "api_key": "AIzaSyDDCOLYBH1hVGZqngyPP6hjgp60E3mowqw",
-        "model": "gemini-flash-latest",
+        "api_key": "",
+        "model": "gemini-2.5-flash-lite-preview-06-17",
         "max_tokens": 2048,
         "temperature": 0.3
     }
