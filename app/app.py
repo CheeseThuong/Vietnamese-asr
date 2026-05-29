@@ -12,6 +12,7 @@
 ====================================================================
 """
 
+#from IPython.core import pylabtools
 import sys
 import logging
 import hashlib
@@ -40,6 +41,7 @@ import json
 import platform
 import traceback
 import random
+import os 
 
 # FIX: Optimize for low-memory environments (Render Free Tier)
 if os.environ.get('RENDER'):
@@ -60,6 +62,8 @@ from pydub import AudioSegment
 from werkzeug.utils import secure_filename
 import soundfile as sf
 import io
+
+# Import DOCX functionality
 try:
     from docx import Document
     from docx.shared import Inches, Pt

@@ -99,6 +99,10 @@ tools/
 temp/
 tmp/
 .cache/
+~$*.docx
+docs/
+
+
 
 # ── Compressed files ──
 *.zip
