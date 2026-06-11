@@ -21,6 +21,13 @@ kích hoạt venv rồi gọi: python launcher.py
 import subprocess
 import sys
 import os
+
+# Force UTF-8 for stdout/stderr on Windows
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except AttributeError:
+    pass
 import time
 import signal
 import webbrowser

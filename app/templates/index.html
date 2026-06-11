@@ -183,12 +183,12 @@
 
                 <!-- UPGRADE 2025: Live Mode Selector -->
                 <div class="live-mode-selector" id="liveModeSelector">
-                    <button class="mode-pill active" id="modeBrowserBtn" data-mode="browser">
+                    <button class="mode-pill" id="modeBrowserBtn" data-mode="browser" hidden>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
                         Browser Live Mode
                         <span class="mode-pill-badge">Mặc định</span>
                     </button>
-                    <button class="mode-pill" id="modeWav2VecBtn" data-mode="wav2vec2">
+                    <button class="mode-pill active" id="modeWav2VecBtn" data-mode="wav2vec2">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
                         Local Wav2Vec2
                         <span class="mode-pill-badge research">Nghiên cứu</span>
@@ -197,7 +197,7 @@
                 <!-- Mode description -->
                 <div class="mode-description" id="modeDescription">
                     <span id="modeDescText">
-                        🌐 <strong>Browser Live Mode</strong> — Nhận dạng nhanh, thời gian thực qua Web Speech API. Phù hợp demo trực tiếp.
+                        🤖 <strong>Local Wav2Vec2 Mode</strong> — Nhận dạng bằng mô hình Wav2Vec2 fine-tuned chạy nội bộ.
                     </span>
                 </div>
 
@@ -369,7 +369,7 @@
 
                     <div class="upload-diarization-controls">
                         <label class="toggle-switch">
-                            <input type="checkbox" id="enableDiarization" checked>
+                            <input type="checkbox" id="enableDiarization">
                             <span class="slider"></span>
                             <span class="label-text">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
@@ -545,10 +545,9 @@
                 <div class="setting-group">
                     <label>Chế độ Live mặc định</label>
                     <select id="defaultLiveModeSelect" class="form-select">
-                        <option value="browser">🌐 Browser Live Mode (khuyến nghị)</option>
                         <option value="wav2vec2">🤖 Local Wav2Vec2 (Nghiên cứu)</option>
                     </select>
-                    <small class="setting-note">Browser Live Mode = nhanh, dùng Web Speech API. Wav2Vec2 = mô hình nghiên cứu, chậm hơn trên CPU.</small>
+                    <small class="setting-note">Local Wav2Vec2 dùng mô hình fine-tuned chạy nội bộ trên server.</small>
                 </div>
 
                 <div class="setting-group">

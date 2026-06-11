@@ -16,6 +16,7 @@
 import sys
 import logging
 import hashlib
+import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -26,6 +27,12 @@ try:
     sys.stderr.reconfigure(encoding='utf-8')
 except AttributeError:
     pass
+
+# Monkeypatch ssl.wrap_socket for Python 3.12+ (compatibility with eventlet)
+import ssl
+if not hasattr(ssl, "wrap_socket"):
+    ssl.wrap_socket = lambda *args, **kwargs: ssl.SSLContext().wrap_socket(*args, **kwargs)
+
 
 # Tải biến môi trường từ file .env (phải chạy trước khi import bất kỳ thứ gì khác)
 try:
@@ -52,6 +59,25 @@ import platform
 import traceback
 import random
 import os 
+# Make bundled ffmpeg visible before pydub is imported, otherwise pydub can
+# emit a false warning during module import on Windows.
+_EARLY_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+_EARLY_PROJECT_ROOT = os.path.dirname(_EARLY_APP_DIR)
+_EARLY_FFMPEG_BIN = os.path.join(_EARLY_PROJECT_ROOT, "tools", "ffmpeg", "bin")
+if os.path.exists(os.path.join(_EARLY_FFMPEG_BIN, "ffmpeg.exe")):
+    os.environ["PATH"] = _EARLY_FFMPEG_BIN + os.pathsep + os.environ.get("PATH", "")
+from pathlib import Path
+import re
+import shutil
+from pydub import AudioSegment
+from werkzeug.utils import secure_filename
+import soundfile as sf
+import io
+import wave
+try:
+    import speech_recognition as sr
+except ImportError:
+    sr = None
 
 # FIX: Optimize for low-memory environments (Render Free Tier)
 if os.environ.get('RENDER'):
@@ -65,21 +91,21 @@ from transformers import (
 )
 from datasets import load_from_disk
 from datetime import datetime
-from pathlib import Path
-import re
-import shutil
-from pydub import AudioSegment
-from werkzeug.utils import secure_filename
-import soundfile as sf
-import io
 
 # Import Gemini client tập trung (quản lý rate limit, cache, retry, chunking)
 try:
-    from gemini_client import (
-        summarize_transcript as _gemini_summarize,
-        test_gemini_connection as _gemini_test,
-        call_gemini as _gemini_call,
-    )
+    try:
+        from gemini_client import (
+            summarize_transcript as _gemini_summarize,
+            test_gemini_connection as _gemini_test,
+            call_gemini as _gemini_call,
+        )
+    except ImportError:
+        from .gemini_client import (
+            summarize_transcript as _gemini_summarize,
+            test_gemini_connection as _gemini_test,
+            call_gemini as _gemini_call,
+        )
     GEMINI_CLIENT_AVAILABLE = True
 except ImportError:
     _gemini_summarize = None
@@ -121,7 +147,10 @@ else:
     print("       Or install ffmpeg manually and add to PATH.")
 
 try:
-    from post_processor import PostProcessor
+    try:
+        from post_processor import PostProcessor
+    except ImportError:
+        from .post_processor import PostProcessor
 except ImportError:
     PostProcessor = None
 
@@ -132,7 +161,10 @@ except Exception:
 
 app = Flask(__name__)
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Force threading async mode on Python 3.12+ because eventlet is incompatible
+import sys
+_async_mode = "threading" if sys.version_info >= (3, 12) else None
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=_async_mode)
 
 # ===== ENCODING CONFIG =====
 app.config['JSON_AS_ASCII'] = False
@@ -153,9 +185,39 @@ ALLOWED_EXTENSIONS = {'wav', 'mp3', 'mp4', 'm4a', 'flac', 'ogg', 'aac', 'wma', '
 MAX_FILE_SIZE = 500 * 1024 * 1024  # 500MB
 
 # Chunking config
-CHUNK_DURATION_S = 30   # seconds per chunk
-CHUNK_OVERLAP_S = 1     # overlap between chunks
-MAX_WORKERS = 4         # parallel chunk processing
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_bool(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+CHUNK_DURATION_S = _env_int("ASR_CHUNK_DURATION_S", 25)
+CHUNK_OVERLAP_S = _env_int("ASR_CHUNK_OVERLAP_S", 2)
+MAX_WORKERS = _env_int("ASR_MAX_WORKERS", 4)
+
+# Quality gates for local Wav2Vec2 realtime mode. These keep low-energy
+# noise and low-confidence CTC output from being committed as final text.
+ASR_TARGET_SR = 16000
+ASR_TRIM_TOP_DB = _env_float("ASR_TRIM_TOP_DB", 28.0)
+ASR_MIN_AUDIO_SECONDS = _env_float("ASR_MIN_AUDIO_SECONDS", 0.45)
+ASR_LIVE_MIN_CONFIDENCE = _env_float("ASR_LIVE_MIN_CONFIDENCE", 0.48)
+ASR_LIVE_MIN_RMS = _env_float("ASR_LIVE_MIN_RMS", 0.004)
+ASR_MAX_BLANK_RATIO = _env_float("ASR_MAX_BLANK_RATIO", 0.985)
 
 # Thread pool for parallel processing
 executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
@@ -200,8 +262,23 @@ MODEL_LOAD_ERROR = None
 
 # === UPGRADE 2025: Đọc cấu hình từ biến môi trường ===
 USE_GEMINI = os.environ.get("USE_GEMINI", "false").lower() in ("true", "1", "yes")
-DEFAULT_LIVE_MODE = os.environ.get("DEFAULT_LIVE_MODE", "browser")  # 'browser' hoặc 'wav2vec2'
 SERVER_VERSION = "2.1.0"
+_configured_live_mode = os.environ.get("DEFAULT_LIVE_MODE")
+_configured_realtime_engine = os.environ.get("REALTIME_ASR_ENGINE")
+if _configured_live_mode:
+    DEFAULT_LIVE_MODE = _configured_live_mode.lower()  # 'browser' hoặc 'wav2vec2'
+    REALTIME_ASR_ENGINE = "wav2vec2"
+else:
+    REALTIME_ASR_ENGINE = "wav2vec2"
+    DEFAULT_LIVE_MODE = "wav2vec2"
+if _configured_realtime_engine and _configured_realtime_engine.lower() != "wav2vec2":
+    logger.warning(
+        "REALTIME_ASR_ENGINE=%r is disabled for realtime; using local wav2vec2. "
+        "Gemini is only used by /api/summarize.",
+        _configured_realtime_engine,
+    )
+REALTIME_ASR_ENGINE = "wav2vec2"
+ENABLE_DIARIZATION = os.environ.get("ENABLE_DIARIZATION", "false").lower() in ("true", "1", "yes")
 
 # Post-processing pipeline
 POST_PROCESSOR = None
@@ -214,21 +291,25 @@ except Exception as _pp_err:
 
 # Speaker Diarization
 SPEAKER_DIARIZER = None
-try:
-    from diarizer import SpeakerDiarizer
-    SPEAKER_DIARIZER = SpeakerDiarizer()
-    if SPEAKER_DIARIZER.available:
-        logger.info(f"Speaker Diarizer loaded (backend: {SPEAKER_DIARIZER.backend_name})")
-    else:
-        logger.warning("Speaker Diarizer: no backend installed")
+if ENABLE_DIARIZATION:
+    try:
+        try:
+            from diarizer import SpeakerDiarizer
+        except ImportError:
+            from .diarizer import SpeakerDiarizer
+        SPEAKER_DIARIZER = SpeakerDiarizer()
+        if SPEAKER_DIARIZER.available:
+            logger.info(f"Speaker Diarizer loaded (backend: {SPEAKER_DIARIZER.backend_name})")
+        else:
+            logger.warning("Speaker Diarizer: no backend installed")
+            SPEAKER_DIARIZER = None
+    except ImportError:
+        logger.warning("Speaker Diarizer not available (diarizer.py not found)")
+    except Exception as _d_err:
+        logger.warning(f"Speaker Diarizer init failed: {_d_err}")
         SPEAKER_DIARIZER = None
-except ImportError:
-    logger.warning("Speaker Diarizer not available (diarizer.py not found)")
-except Exception as _d_err:
-    logger.warning(f"Speaker Diarizer init failed: {_d_err}")
-
-DEFAULT_HF_MODEL_SOURCE = "https://huggingface.co/datasets/doof-ferb/vlsp2020_vinai_100h"
-
+else:
+    logger.info("Speaker Diarizer disabled (ENABLE_DIARIZATION=false)")
 
 def normalize_hf_source(source):
     """Convert a Hugging Face URL or repo reference to a repo id."""
@@ -247,7 +328,7 @@ def normalize_hf_source(source):
 
 
 def get_configured_hf_source():
-    """Read the preferred Hugging Face source from environment variables."""
+    """Read an explicit Hugging Face model source from environment variables."""
     for env_name in (
         "ASR_MODEL_SOURCE",
         "HUGGINGFACE_MODEL_ID",
@@ -260,7 +341,7 @@ def get_configured_hf_source():
         if value:
             return normalize_hf_source(value)
 
-    return normalize_hf_source(DEFAULT_HF_MODEL_SOURCE)
+    return None
 
 
 def get_local_dataset_path():
@@ -306,7 +387,288 @@ def extract_audio_sample(audio_sample):
     return None, None
 
 
-def transcribe_audio_array(speech, sampling_rate=16000):
+def resample_waveform(speech, orig_sr, target_sr=ASR_TARGET_SR):
+    """Resample mono float32 audio without relying on librosa lazy imports."""
+    if orig_sr == target_sr:
+        return speech.astype(np.float32), target_sr
+
+    waveform = torch.from_numpy(np.asarray(speech, dtype=np.float32)).unsqueeze(0)
+    with torch.no_grad():
+        resampled = torchaudio.functional.resample(waveform, orig_freq=orig_sr, new_freq=target_sr)
+    return resampled.squeeze(0).cpu().numpy().astype(np.float32), target_sr
+
+
+def trim_silence_np(speech, sr, top_db=ASR_TRIM_TOP_DB):
+    """Trim leading/trailing silence using frame RMS; avoids librosa.effects/sklearn."""
+    speech = np.asarray(speech, dtype=np.float32)
+    if speech.size == 0:
+        return speech
+
+    frame_length = max(256, int(0.025 * sr))
+    hop_length = max(128, int(0.010 * sr))
+    peak = float(np.max(np.abs(speech))) if speech.size else 0.0
+    if peak <= 1e-8:
+        return speech
+
+    threshold = peak * (10 ** (-top_db / 20.0))
+    active_frames = []
+    for start in range(0, max(1, len(speech) - frame_length + 1), hop_length):
+        frame = speech[start:start + frame_length]
+        rms = float(np.sqrt(np.mean(np.square(frame)))) if frame.size else 0.0
+        if rms >= threshold:
+            active_frames.append((start, min(len(speech), start + frame_length)))
+
+    if not active_frames:
+        return speech
+
+    pad = int(0.08 * sr)
+    start = max(0, active_frames[0][0] - pad)
+    end = min(len(speech), active_frames[-1][1] + pad)
+    return speech[start:end]
+
+
+def split_speech_intervals_np(speech, sr, top_db=ASR_TRIM_TOP_DB):
+    """Return active speech intervals in samples using RMS thresholding."""
+    speech = np.asarray(speech, dtype=np.float32)
+    if speech.size == 0:
+        return []
+
+    frame_length = max(512, int(0.03 * sr))
+    hop_length = max(160, int(0.015 * sr))
+    peak = float(np.max(np.abs(speech))) if speech.size else 0.0
+    if peak <= 1e-8:
+        return []
+
+    threshold = peak * (10 ** (-top_db / 20.0))
+    intervals = []
+    current_start = None
+    current_end = None
+
+    for start in range(0, len(speech), hop_length):
+        end = min(len(speech), start + frame_length)
+        frame = speech[start:end]
+        if frame.size == 0:
+            break
+        rms = float(np.sqrt(np.mean(np.square(frame))))
+        if rms >= threshold:
+            if current_start is None:
+                current_start = start
+            current_end = end
+        elif current_start is not None:
+            intervals.append((current_start, current_end))
+            current_start = None
+            current_end = None
+
+    if current_start is not None:
+        intervals.append((current_start, current_end))
+
+    # Merge tiny gaps so syllables in the same utterance stay together.
+    merged = []
+    max_gap = int(0.35 * sr)
+    for start, end in intervals:
+        if not merged or start - merged[-1][1] > max_gap:
+            merged.append([start, end])
+        else:
+            merged[-1][1] = max(merged[-1][1], end)
+    return [(s, e) for s, e in merged]
+
+
+def load_audio_file_for_asr(audio_path, target_sr=ASR_TARGET_SR):
+    """Load any supported upload as mono target_sr waveform using ffmpeg+pydub and soundfile."""
+    wav_path = convert_to_wav(audio_path)
+    if wav_path is None:
+        return None, None, None
+
+    try:
+        speech, sr = sf.read(wav_path, dtype="float32", always_2d=False)
+    finally:
+        if wav_path != audio_path and os.path.exists(wav_path):
+            try:
+                os.unlink(wav_path)
+            except Exception:
+                pass
+
+    speech, sr, _ = prepare_speech_for_asr(speech, sr, trim_silence=True)
+    return speech, sr, wav_path
+
+
+def prepare_speech_for_asr(speech, sampling_rate=ASR_TARGET_SR, trim_silence=False):
+    """Convert arbitrary audio arrays to clean 16 kHz mono float32 waveform."""
+    if speech is None:
+        return None, None, {"duration": 0.0, "rms": 0.0}
+
+    speech = np.asarray(speech)
+    if speech.size == 0:
+        return None, None, {"duration": 0.0, "rms": 0.0}
+
+    if speech.ndim > 1:
+        speech = np.mean(speech, axis=1)
+
+    speech = speech.astype(np.float32)
+    speech = np.nan_to_num(speech, nan=0.0, posinf=0.0, neginf=0.0)
+
+    if sampling_rate != ASR_TARGET_SR:
+        speech, sampling_rate = resample_waveform(speech, sampling_rate, ASR_TARGET_SR)
+
+    if trim_silence and len(speech) > sampling_rate:
+        try:
+            trimmed = trim_silence_np(speech, sampling_rate, top_db=ASR_TRIM_TOP_DB)
+            if len(trimmed) >= int(ASR_MIN_AUDIO_SECONDS * sampling_rate):
+                speech = trimmed
+        except Exception as trim_err:
+            logger.debug(f"Silence trim skipped: {trim_err}")
+
+    speech = speech - float(np.mean(speech))
+    rms = float(np.sqrt(np.mean(np.square(speech)))) if speech.size else 0.0
+
+    metrics = {
+        "duration": round(len(speech) / sampling_rate, 3) if sampling_rate else 0.0,
+        "rms": round(rms, 6),
+    }
+    return speech.astype(np.float32), sampling_rate, metrics
+
+
+def compute_ctc_quality(logits, predicted_ids):
+    """Return simple quality metrics for greedy CTC decoding."""
+    with torch.no_grad():
+        probs = torch.softmax(logits, dim=-1)
+        max_probs = torch.max(probs, dim=-1).values[0].detach().cpu().numpy()
+
+    ids = predicted_ids[0].detach().cpu().numpy()
+    blank_id = getattr(PROCESSOR.tokenizer, "pad_token_id", None)
+    if blank_id is None:
+        blank_id = getattr(PROCESSOR.tokenizer, "blank_token_id", None)
+
+    if blank_id is None:
+        non_blank_mask = np.ones_like(ids, dtype=bool)
+        blank_ratio = 0.0
+    else:
+        non_blank_mask = ids != blank_id
+        blank_ratio = float(np.mean(ids == blank_id)) if ids.size else 1.0
+
+    token_conf = float(np.mean(max_probs[non_blank_mask])) if np.any(non_blank_mask) else 0.0
+    frame_conf = float(np.mean(max_probs)) if max_probs.size else 0.0
+
+    return {
+        "token_confidence": round(token_conf, 4),
+        "frame_confidence": round(frame_conf, 4),
+        "blank_ratio": round(blank_ratio, 4),
+    }
+
+
+def float32_to_wav_bytes(audio_array, sampling_rate=16000):
+    """Convert standard float32 numpy audio array [-1.0, 1.0] to a 16-bit PCM WAV byte stream."""
+    import io
+    import wave
+    audio_data = np.clip(audio_array, -1.0, 1.0)
+    audio_data = (audio_data * 32767).astype(np.int16)
+    
+    wav_io = io.BytesIO()
+    with wave.open(wav_io, 'wb') as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sampling_rate)
+        wav_file.writeframes(audio_data.tobytes())
+    return wav_io.getvalue()
+
+
+def transcribe_with_google_api_direct(wav_bytes, language='vi-VN'):
+    """Fallback function to send raw WAV bytes to Google Chromium Speech Recognition API directly."""
+    try:
+        import requests
+        url = f"https://www.google.com/speech-api/v2/recognize?client=chromium&output=json&lang={language}&key="
+        headers = {
+            "Content-Type": "audio/x-wav; charset=utf-8"
+        }
+        response = requests.post(url, data=wav_bytes, headers=headers, timeout=8)
+        if response.status_code != 200:
+            return {"success": False, "error": f"Google API returned status {response.status_code}"}
+        
+        # Parse the Chromium multi-line JSON response (NDJSON)
+        text = ""
+        for line in response.text.split('\n'):
+            if not line.strip():
+                continue
+            try:
+                res = json.loads(line)
+                if "result" in res and len(res["result"]) > 0:
+                    result = res["result"][0]
+                    if "alternative" in result and len(result["alternative"]) > 0:
+                        text = result["alternative"][0]["transcript"]
+            except Exception:
+                pass
+        
+        if text:
+            return {"success": True, "transcription": text}
+        return {"success": False, "error": "Không nhận dạng được âm thanh"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def transcribe_with_gemini_api(wav_bytes):
+    """Use the official Google GenAI SDK to transcribe WAV bytes."""
+    try:
+        from google import genai
+        from google.genai import types
+        
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            return {"success": False, "error": "Thiếu GEMINI_API_KEY trong biến môi trường"}
+            
+        client = genai.Client(api_key=api_key)
+        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+        
+        response = client.models.generate_content(
+            model=model,
+            contents=[
+                types.Part.from_bytes(
+                    data=wav_bytes,
+                    mime_type='audio/wav',
+                ),
+                "Hãy viết lại chính xác toàn bộ lời thoại trong file âm thanh này bằng tiếng Việt. Không thêm bớt từ, không giải thích, không viết thêm nhận xét."
+            ]
+        )
+        if response and response.text:
+            return {"success": True, "transcription": response.text.strip()}
+        return {"success": False, "error": "Gemini API returned empty response"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def transcribe_realtime_array(
+    speech,
+    sampling_rate=ASR_TARGET_SR,
+    *,
+    trim_silence=False,
+    reject_low_quality=False,
+    min_confidence=0.0,
+    min_rms=0.0,
+):
+    """
+    Transcribe audio for the real-time WebSocket stream with local Wav2Vec2 only.
+
+    Gemini is intentionally not used here; it is only called from completed
+    transcript summarization endpoints.
+    """
+    return transcribe_audio_array(
+        speech,
+        sampling_rate=sampling_rate,
+        trim_silence=trim_silence,
+        reject_low_quality=reject_low_quality,
+        min_confidence=min_confidence,
+        min_rms=min_rms,
+    )
+
+
+def transcribe_audio_array(
+    speech,
+    sampling_rate=ASR_TARGET_SR,
+    *,
+    trim_silence=False,
+    reject_low_quality=False,
+    min_confidence=0.0,
+    min_rms=0.0,
+):
     """Transcribe an in-memory waveform using the loaded model."""
     if MODEL_LOAD_STATUS == "loading":
         return {"success": False, "error": "Model is still loading in background"}
@@ -317,16 +679,19 @@ def transcribe_audio_array(speech, sampling_rate=16000):
         if speech is None:
             return {"success": False, "error": "No audio data provided"}
 
-        speech = np.asarray(speech)
-        if speech.ndim > 1:
-            speech = np.mean(speech, axis=1)
+        speech, sampling_rate, audio_metrics = prepare_speech_for_asr(
+            speech,
+            sampling_rate=sampling_rate,
+            trim_silence=trim_silence,
+        )
+        if speech is None:
+            return {"success": False, "error": "No usable audio data", "asr_metrics": audio_metrics}
 
-        if sampling_rate != 16000:
-            speech = librosa.resample(speech.astype(np.float32), orig_sr=sampling_rate, target_sr=16000)
-            sampling_rate = 16000
-
-        speech = speech.astype(np.float32)
-        speech = speech / (np.max(np.abs(speech)) + 1e-6)
+        if reject_low_quality:
+            if audio_metrics["duration"] < ASR_MIN_AUDIO_SECONDS:
+                return {"success": False, "error": "Audio segment too short", "asr_metrics": audio_metrics}
+            if audio_metrics["rms"] < min_rms:
+                return {"success": False, "error": "Audio energy too low", "asr_metrics": audio_metrics}
 
         input_values = PROCESSOR(
             speech,
@@ -338,10 +703,19 @@ def transcribe_audio_array(speech, sampling_rate=16000):
             logits = MODEL(input_values).logits
 
         predicted_ids = torch.argmax(logits, dim=-1)
+        quality_metrics = compute_ctc_quality(logits, predicted_ids)
+        asr_metrics = {**audio_metrics, **quality_metrics}
+
         transcription = PROCESSOR.batch_decode(predicted_ids)[0].strip().lower()
 
         if not transcription:
-            return {"success": False, "error": "Model returned empty transcription"}
+            return {"success": False, "error": "Model returned empty transcription", "asr_metrics": asr_metrics}
+
+        if reject_low_quality:
+            if quality_metrics["blank_ratio"] >= ASR_MAX_BLANK_RATIO:
+                return {"success": False, "error": "Mostly blank CTC output", "asr_metrics": asr_metrics}
+            if quality_metrics["token_confidence"] < min_confidence:
+                return {"success": False, "error": "Low confidence ASR output", "asr_metrics": asr_metrics}
 
         # --- Post-processing pipeline ---
         original_transcription = transcription
@@ -359,6 +733,7 @@ def transcribe_audio_array(speech, sampling_rate=16000):
             "transcription": transcription,
             "original_transcription": original_transcription,
             "post_processing_steps": pp_steps,
+            "asr_metrics": asr_metrics,
             "word_count": len(transcription.split()),
             "timestamp": datetime.now().strftime("%H:%M:%S")
         }
@@ -613,21 +988,9 @@ def convert_to_wav(audio_path):
 def preprocess_audio(audio_path, target_sr=16000):
     """Preprocess audio file for inference"""
     try:
-        # Convert to WAV if needed
-        wav_path = convert_to_wav(audio_path)
-        if wav_path is None:
+        speech, sr, _ = load_audio_file_for_asr(audio_path, target_sr=target_sr)
+        if speech is None:
             return None, None
-        
-        # Load audio
-        speech, sr = librosa.load(wav_path, sr=target_sr)
-        
-        # Normalize
-        speech = speech / (np.max(np.abs(speech)) + 1e-6)
-        
-        # Clean up converted file if different from original
-        if wav_path != audio_path and os.path.exists(wav_path):
-            os.unlink(wav_path)
-        
         return speech, sr
     except Exception as e:
         print(f"Error preprocessing audio: {e}")
@@ -647,13 +1010,61 @@ def transcribe_audio(audio_path):
 def transcribe_chunk(chunk_data):
     """Transcribe a single audio chunk. Used by ThreadPoolExecutor."""
     idx, speech_chunk, sr, offset = chunk_data
-    result = transcribe_audio_array(speech_chunk, sr)
+    result = transcribe_audio_array(speech_chunk, sr, trim_silence=True)
     if result.get("success"):
         duration = len(speech_chunk) / sr
         result["chunk_index"] = idx
         result["start"] = round(offset, 2)
         result["end"] = round(offset + duration, 2)
     return result
+
+
+def build_speech_chunk_tasks(speech, sr):
+    """Build chunks near silence boundaries, falling back to fixed windows."""
+    max_samples = int(CHUNK_DURATION_S * sr)
+    overlap_samples = int(CHUNK_OVERLAP_S * sr)
+    pad_samples = int(0.2 * sr)
+
+    try:
+        intervals = split_speech_intervals_np(speech, sr, top_db=ASR_TRIM_TOP_DB)
+    except Exception as split_err:
+        logger.debug(f"Voice activity split skipped: {split_err}")
+        intervals = []
+
+    chunk_ranges = []
+    if len(intervals) > 0:
+        current_start = None
+        current_end = None
+        for start, end in intervals:
+            start = max(0, start - pad_samples)
+            end = min(len(speech), end + pad_samples)
+            if current_start is None:
+                current_start, current_end = start, end
+                continue
+
+            if end - current_start <= max_samples:
+                current_end = end
+            else:
+                chunk_ranges.append((current_start, current_end))
+                current_start, current_end = start, end
+
+        if current_start is not None:
+            chunk_ranges.append((current_start, current_end))
+    else:
+        step = max(1, max_samples - overlap_samples)
+        offset = 0
+        while offset < len(speech):
+            end = min(offset + max_samples, len(speech))
+            chunk_ranges.append((offset, end))
+            offset += step
+
+    chunk_tasks = []
+    for idx, (start, end) in enumerate(chunk_ranges):
+        if end - start < sr:
+            continue
+        chunk_tasks.append((idx, speech[start:end], sr, start / sr))
+
+    return chunk_tasks
 
 
 def transcribe_audio_chunked(audio_path, enable_diarization=False,
@@ -666,28 +1077,15 @@ def transcribe_audio_chunked(audio_path, enable_diarization=False,
     and diarization results if enabled.
     """
     try:
-        wav_path = convert_to_wav(audio_path)
-        if wav_path is None:
-            return {"success": False, "error": "Failed to convert audio"}
-
-        speech, sr = librosa.load(wav_path, sr=16000)
+        speech, sr, wav_path = load_audio_file_for_asr(audio_path, target_sr=ASR_TARGET_SR)
         if speech is None:
             return {"success": False, "error": "Failed to load audio"}
 
-        speech = speech.astype(np.float32)
-        speech = speech / (np.max(np.abs(speech)) + 1e-6)
         duration = len(speech) / sr
-
-        # Clean up converted file
-        if wav_path != audio_path and os.path.exists(wav_path):
-            try:
-                os.unlink(wav_path)
-            except Exception:
-                pass
 
         # If short enough, transcribe directly
         if duration <= CHUNK_DURATION_S + 5:
-            result = transcribe_audio_array(speech, sr)
+            result = transcribe_audio_array(speech, sr, trim_silence=True)
             if result.get("success"):
                 result["chunks"] = [{
                     "text": result["transcription"],
@@ -698,23 +1096,7 @@ def transcribe_audio_chunked(audio_path, enable_diarization=False,
                 result["chunk_count"] = 1
             return result
 
-        # Split into chunks
-        chunk_samples = int(CHUNK_DURATION_S * sr)
-        overlap_samples = int(CHUNK_OVERLAP_S * sr)
-        step = chunk_samples - overlap_samples
-
-        chunk_tasks = []
-        offset = 0
-        idx = 0
-        while offset < len(speech):
-            end = min(offset + chunk_samples, len(speech))
-            chunk = speech[offset:end]
-            if len(chunk) < sr:  # Skip chunks < 1s
-                break
-            chunk_tasks.append((idx, chunk, sr, offset / sr))
-            offset += step
-            idx += 1
-
+        chunk_tasks = build_speech_chunk_tasks(speech, sr)
         total_chunks = len(chunk_tasks)
         logger.info(f"Chunking: {total_chunks} chunks, duration={duration:.1f}s")
 
@@ -946,12 +1328,56 @@ SESSION_BUFFERS = {}
 
 # --- HẰNG SỐ CẤU HÌNH VAD VÀ ỔN ĐỊNH NHẬN DẠNG ---
 # Tùy thuộc vào độ nhạy của micro và độ ồn của phòng, bạn có thể cần điều chỉnh các thông số này.
-VAD_RMS_THRESHOLD = 0.003       # Ngưỡng năng lượng âm thanh tối thiểu để nhận biết người nói (thấp hơn = nhạy hơn)
-VAD_SILENCE_SECONDS = 1.0       # Thời gian im lặng tối thiểu (giây) trước khi chốt câu tự động
-STABILITY_CYCLES = 3            # Số chu kỳ dịch liên tiếp có kết quả chuẩn hóa tương đương để coi là ổn định
-FORCE_COMMIT_SECONDS = 6.0      # Thời gian tối đa (giây) nói liên tục mà chưa chốt câu để ép chốt câu tránh trễ
-MIN_COMMIT_WORDS = 2            # Số lượng từ tối thiểu để chốt câu (tránh tiếng ồn hay từ rác siêu ngắn)
-INFERENCE_INTERVAL_S = 1.2      # Khoảng cách tối thiểu (giây) giữa các lần chạy mô hình Wav2Vec2 (tiết kiệm CPU)
+VAD_RMS_THRESHOLD = _env_float("ASR_VAD_RMS_THRESHOLD", 0.004)
+VAD_MAX_RMS_THRESHOLD = _env_float("ASR_VAD_MAX_RMS_THRESHOLD", 0.03)
+VAD_NOISE_MULTIPLIER = _env_float("ASR_VAD_NOISE_MULTIPLIER", 2.8)
+VAD_NOISE_ALPHA = _env_float("ASR_VAD_NOISE_ALPHA", 0.08)
+VAD_PRE_ROLL_SECONDS = _env_float("ASR_VAD_PRE_ROLL_SECONDS", 0.35)
+VAD_SILENCE_SECONDS = _env_float("ASR_VAD_SILENCE_SECONDS", 1.15)
+STABILITY_CYCLES = _env_int("ASR_STABILITY_CYCLES", 3)
+COMMIT_ON_STABILITY = _env_bool("ASR_COMMIT_ON_STABILITY", False)
+FORCE_COMMIT_SECONDS = _env_float("ASR_FORCE_COMMIT_SECONDS", 22.0)
+MIN_COMMIT_WORDS = _env_int("ASR_MIN_COMMIT_WORDS", 2)
+INFERENCE_INTERVAL_S = _env_float("ASR_INFERENCE_INTERVAL_S", 1.5)
+REALTIME_MAX_BUFFER_SECONDS = _env_float("ASR_REALTIME_MAX_BUFFER_SECONDS", 25.0)
+REALTIME_INFER_WINDOW_SECONDS = _env_float("ASR_REALTIME_INFER_WINDOW_SECONDS", 8.0)
+
+
+def reset_realtime_utterance(session):
+    """Reset the active utterance while preserving transcript and room noise floor."""
+    session['audio'] = np.array([], dtype=np.float32)
+    session['pre_roll'] = np.array([], dtype=np.float32)
+    session['speech_started'] = False
+    session['silence_duration'] = 0.0
+    session['continuous_speech_duration'] = 0.0
+    session['last_predictions'] = []
+    session['interim_text'] = ""
+
+
+def decode_realtime_audio_payload(data):
+    """Decode a Socket.IO audio payload as normalized mono float32 samples."""
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        return None
+
+    raw = bytes(data)
+    if not raw:
+        return None
+
+    if len(raw) % 4 == 0:
+        pcm_float = np.frombuffer(raw, dtype=np.float32)
+        if (
+            pcm_float.size
+            and np.all(np.isfinite(pcm_float))
+            and float(np.percentile(np.abs(pcm_float), 99)) <= 2.0
+        ):
+            return np.clip(pcm_float.astype(np.float32, copy=True), -1.0, 1.0)
+
+    if len(raw) % 2 == 0:
+        pcm_int16 = np.frombuffer(raw, dtype=np.int16)
+        if pcm_int16.size:
+            return (pcm_int16.astype(np.float32) / 32768.0).clip(-1.0, 1.0)
+
+    return None
 
 def clean_text_for_commit(text):
     if not text:
@@ -1011,6 +1437,10 @@ def is_duplicate_or_garbage(text, last_text):
 def handle_connect():
     SESSION_BUFFERS[request.sid] = {
         'audio': np.array([], dtype=np.float32),
+        'pre_roll': np.array([], dtype=np.float32),
+        'speech_started': False,
+        'noise_floor': max(VAD_RMS_THRESHOLD / VAD_NOISE_MULTIPLIER, 1e-5),
+        'vad_threshold': VAD_RMS_THRESHOLD,
         'confirmed_text': '',
         'last_committed_text': '',
         'interim_text': '',
@@ -1018,6 +1448,7 @@ def handle_connect():
         'continuous_speech_duration': 0.0,
         'last_predictions': [],
         'last_inference_time': 0.0,
+        'inference_lock': threading.Lock(),
         'chunk_id': 0
     }
     emit('server_ready', {'message': 'Connected to ASR Server'})
@@ -1028,42 +1459,61 @@ def handle_disconnect():
 
 @socketio.on('audio_chunk')
 def handle_audio_chunk(data):
-    if not isinstance(data, bytes):
-        return
-
-    pcm_data = np.frombuffer(data, dtype=np.float32)
+    pcm_data = decode_realtime_audio_payload(data)
 
     # Guard: ignore empty or corrupted chunks
-    if pcm_data.size == 0:
+    if pcm_data is None or pcm_data.size == 0:
         return
 
     session = SESSION_BUFFERS.get(request.sid)
     if not session:
         return
 
-    # 1. Simple VAD-lite (RMS energy calculation)
-    rms = np.sqrt(np.mean(pcm_data**2))
-    
-    # Calculate chunk duration (PCM float32, 16000Hz, mono)
-    chunk_duration = pcm_data.size / 16000
-    
-    is_silent = rms < VAD_RMS_THRESHOLD
-    
+    # 1. Adaptive VAD. Learn the room noise floor and start buffering only
+    # when speech rises clearly above it.
+    rms = float(np.sqrt(np.mean(pcm_data**2)))
+    # Calculate chunk duration (PCM float32, 16 kHz mono)
+    chunk_duration = pcm_data.size / ASR_TARGET_SR
+    noise_floor = float(session.get('noise_floor', VAD_RMS_THRESHOLD / VAD_NOISE_MULTIPLIER))
+    adaptive_threshold = min(
+        VAD_MAX_RMS_THRESHOLD,
+        max(VAD_RMS_THRESHOLD, noise_floor * VAD_NOISE_MULTIPLIER),
+    )
+    is_silent = rms < adaptive_threshold
+
     if is_silent:
         session['silence_duration'] = session.get('silence_duration', 0.0) + chunk_duration
+        noise_floor = ((1.0 - VAD_NOISE_ALPHA) * noise_floor) + (VAD_NOISE_ALPHA * rms)
+        session['noise_floor'] = max(noise_floor, 1e-5)
+        session['vad_threshold'] = min(
+            VAD_MAX_RMS_THRESHOLD,
+            max(VAD_RMS_THRESHOLD, session['noise_floor'] * VAD_NOISE_MULTIPLIER),
+        )
     else:
         session['silence_duration'] = 0.0
         session['continuous_speech_duration'] = session.get('continuous_speech_duration', 0.0) + chunk_duration
+        session['vad_threshold'] = adaptive_threshold
+    # Keep a short lead-in so the first phoneme is not clipped, but do not
+    # feed long leading room noise into Wav2Vec2.
+    if not session.get('speech_started', False):
+        if is_silent:
+            session['pre_roll'] = np.concatenate([session['pre_roll'], pcm_data])
+            max_pre_roll = int(ASR_TARGET_SR * VAD_PRE_ROLL_SECONDS)
+            if len(session['pre_roll']) > max_pre_roll:
+                session['pre_roll'] = session['pre_roll'][-max_pre_roll:]
+            return
+        session['audio'] = np.concatenate([session['pre_roll'], pcm_data])
+        session['pre_roll'] = np.array([], dtype=np.float32)
+        session['speech_started'] = True
+    else:
+        session['audio'] = np.concatenate([session['audio'], pcm_data])
 
-    # 2. Append new data to buffer
-    session['audio'] = np.concatenate([session['audio'], pcm_data])
-
-    # Keep max 5 seconds of audio for sliding window
-    MAX_BUFFER = 16000 * 5
+    # Keep enough context for local Wav2Vec2. Very short windows are unstable.
+    MAX_BUFFER = int(ASR_TARGET_SR * REALTIME_MAX_BUFFER_SECONDS)
     if len(session['audio']) > MAX_BUFFER:
         session['audio'] = session['audio'][-MAX_BUFFER:]
 
-    # 3. Optimize CPU: Only run Wav2Vec2 inference every INFERENCE_INTERVAL_S seconds
+    # 3. Optimize CPU: Only run inference every INFERENCE_INTERVAL_S seconds
     now = time.time()
     last_infer = session.get('last_inference_time', 0.0)
     
@@ -1085,11 +1535,63 @@ def handle_audio_chunk(data):
         })
         return
 
+    inference_lock = session.setdefault('inference_lock', threading.Lock())
+    if not inference_lock.acquire(blocking=False):
+        emit('transcript_update', {
+            'text': session.get('interim_text', ''),
+            'full_text': session['confirmed_text'].strip(),
+            'chunk_id': session['chunk_id'],
+            'is_final': False,
+            'status_message': "Đang xử lý Wav2Vec2...",
+            'latency': 0
+        })
+        return
+
     session['last_inference_time'] = now
     started_at = time.perf_counter()
 
-    # 4. Transcribe the buffer
-    result = transcribe_audio_array(session['audio'], 16000)
+    commit_due_to_silence = session['silence_duration'] >= VAD_SILENCE_SECONDS
+    commit_due_to_duration = session.get('continuous_speech_duration', 0.0) >= FORCE_COMMIT_SECONDS
+    inference_audio = session['audio']
+    if not (commit_due_to_silence or commit_due_to_duration):
+        max_infer_samples = int(ASR_TARGET_SR * REALTIME_INFER_WINDOW_SECONDS)
+        if max_infer_samples > 0 and len(inference_audio) > max_infer_samples:
+            inference_audio = inference_audio[-max_infer_samples:]
+
+    # 4. Transcribe the current inference window. Final commits use the full
+    # utterance; interim updates use a shorter trailing window for lower latency.
+    try:
+        result = transcribe_realtime_array(
+            inference_audio,
+            ASR_TARGET_SR,
+            trim_silence=True,
+            reject_low_quality=True,
+            min_confidence=ASR_LIVE_MIN_CONFIDENCE,
+            min_rms=ASR_LIVE_MIN_RMS,
+        )
+    except Exception as rt_exc:
+        logger.exception("[RT] Realtime inference crashed")
+        result = {"success": False, "error": str(rt_exc), "asr_metrics": {}}
+    finally:
+        inference_lock.release()
+    if not result.get("success"):
+        metrics = result.get("asr_metrics", {})
+        metrics.update({
+            "noise_floor": round(float(session.get('noise_floor', 0.0)), 6),
+            "vad_threshold": round(float(session.get('vad_threshold', VAD_RMS_THRESHOLD)), 6),
+        })
+        emit('transcript_update', {
+            'text': session.get('interim_text', ''),
+            'full_text': session['confirmed_text'].strip(),
+            'chunk_id': session['chunk_id'],
+            'is_final': False,
+            'status_message': f"Đang nghe... ({result.get('error', 'chưa đủ tín hiệu')})",
+            'latency': round((time.perf_counter() - started_at) * 1000),
+            'asr_metrics': metrics,
+        })
+        if session.get('silence_duration', 0.0) >= VAD_SILENCE_SECONDS:
+            reset_realtime_utterance(session)
+        return
     new_transcript = result.get('transcription', '').strip()
     
     # 5. Stability Check using normalized text
@@ -1108,18 +1610,22 @@ def handle_audio_chunk(data):
 
     interim_text = new_transcript
     session['interim_text'] = interim_text
+    result.setdefault('asr_metrics', {}).update({
+        "noise_floor": round(float(session.get('noise_floor', 0.0)), 6),
+        "vad_threshold": round(float(session.get('vad_threshold', VAD_RMS_THRESHOLD)), 6),
+    })
     
     # 6. Silence / Stability / Force Commit decision
     should_commit = False
     commit_reason = ""
     
-    if session['silence_duration'] >= VAD_SILENCE_SECONDS and interim_text:
+    if commit_due_to_silence and interim_text:
         should_commit = True
         commit_reason = f"Đã chốt 1 đoạn (Khoảng lặng {session['silence_duration']:.1f}s)"
-    elif session.get('continuous_speech_duration', 0.0) >= FORCE_COMMIT_SECONDS and interim_text:
+    elif commit_due_to_duration and interim_text:
         should_commit = True
         commit_reason = f"Đã force commit sau {FORCE_COMMIT_SECONDS} giây"
-    elif is_stable and interim_text:
+    elif COMMIT_ON_STABILITY and is_stable and interim_text:
         last_committed = session.get('last_committed_text', '')
         if normalize_text_for_stability(interim_text) != normalize_text_for_stability(last_committed):
             should_commit = True
@@ -1143,15 +1649,12 @@ def handle_audio_chunk(data):
                 'chunk_id': session['chunk_id'],
                 'is_final': True,
                 'status_message': commit_reason,
-                'latency': latency
+                'latency': latency,
+                'asr_metrics': result.get('asr_metrics', {})
             })
             
         # Reset rolling buffer and stability states
-        session['audio'] = np.array([], dtype=np.float32)
-        session['silence_duration'] = 0.0
-        session['continuous_speech_duration'] = 0.0
-        session['last_predictions'] = []
-        session['interim_text'] = ""
+        reset_realtime_utterance(session)
         
     else:
         # Emit as interim result
@@ -1171,7 +1674,8 @@ def handle_audio_chunk(data):
             'chunk_id': session['chunk_id'],
             'is_final': False,
             'status_message': status_msg,
-            'latency': latency
+            'latency': latency,
+            'asr_metrics': result.get('asr_metrics', {})
         })
 
 @socketio.on('stop_recording')
@@ -1184,7 +1688,43 @@ def handle_stop_recording():
     
     # Force transcribe and commit any remaining audio buffer
     if len(session['audio']) > 0:
-        result = transcribe_audio_array(session['audio'], 16000)
+        inference_lock = session.setdefault('inference_lock', threading.Lock())
+        if not inference_lock.acquire(timeout=5):
+            emit('transcript_update', {
+                'text': '',
+                'full_text': session['confirmed_text'].strip(),
+                'chunk_id': session['chunk_id'],
+                'is_final': False,
+                'status_message': "Đang xử lý đoạn cuối...",
+                'latency': 0,
+            })
+            return
+        try:
+            result = transcribe_realtime_array(
+                session['audio'],
+                ASR_TARGET_SR,
+                trim_silence=True,
+                reject_low_quality=True,
+                min_confidence=ASR_LIVE_MIN_CONFIDENCE,
+                min_rms=ASR_LIVE_MIN_RMS,
+            )
+        except Exception as rt_exc:
+            logger.exception("[RT] Final realtime inference crashed")
+            result = {"success": False, "error": str(rt_exc), "asr_metrics": {}}
+        finally:
+            inference_lock.release()
+        if not result.get("success"):
+            emit('transcript_update', {
+                'text': '',
+                'full_text': session['confirmed_text'].strip(),
+                'chunk_id': session['chunk_id'],
+                'is_final': False,
+                'status_message': f"Đã dừng, bỏ qua đoạn cuối ({result.get('error', 'chưa đủ tín hiệu')})",
+                'latency': 0,
+                'asr_metrics': result.get('asr_metrics', {}),
+            })
+            reset_realtime_utterance(session)
+            return
         final_text = result.get('transcription', '').strip()
         cleaned = clean_text_for_commit(final_text)
         last_committed = session.get('last_committed_text', '')
@@ -1201,15 +1741,12 @@ def handle_stop_recording():
                 'chunk_id': session['chunk_id'],
                 'is_final': True,
                 'status_message': "Đã dừng và chốt đoạn cuối",
-                'latency': 0
+                'latency': 0,
+                'asr_metrics': result.get('asr_metrics', {})
             })
             
     # Reset session buffers
-    session['audio'] = np.array([], dtype=np.float32)
-    session['silence_duration'] = 0.0
-    session['continuous_speech_duration'] = 0.0
-    session['last_predictions'] = []
-    session['interim_text'] = ""
+    reset_realtime_utterance(session)
 
 @socketio.on('correct_text')
 def handle_correct_text(data):
@@ -1248,6 +1785,7 @@ def api_status():
         "status": MODEL_LOAD_STATUS,
         "model_source": MODEL_SOURCE,
         "available_devices": device_info,
+        "realtime_asr_engine": REALTIME_ASR_ENGINE,
         "error": MODEL_LOAD_ERROR
     })
 
@@ -1255,10 +1793,6 @@ def api_status():
 def health():
     """Health check alias for Render and other deployment platforms"""
     return api_status()
-
-
-# ===================== UPGRADE 2025: NEW ENDPOINTS =====================
-
 @app.route('/api/health', methods=['GET'])
 def api_health():
     """
@@ -1275,7 +1809,7 @@ def api_health():
         "use_gemini": USE_GEMINI,
         "default_live_mode": DEFAULT_LIVE_MODE,
         "ffmpeg_available": FFMPEG_AVAILABLE,
-        "diarization_available": SPEAKER_DIARIZER is not None,
+        "diarization_available": bool(SPEAKER_DIARIZER and SPEAKER_DIARIZER.available),
         "post_processing_available": POST_PROCESSOR is not None,
     })
 
@@ -1352,11 +1886,28 @@ def api_config():
         "gemini_configured": has_gemini_key,
         "gemini_model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite"),
         "ffmpeg_available": FFMPEG_AVAILABLE,
-        "diarization_available": SPEAKER_DIARIZER is not None,
+        "diarization_available": bool(SPEAKER_DIARIZER and SPEAKER_DIARIZER.available),
         "post_processing_available": POST_PROCESSOR is not None,
         "max_file_size_mb": MAX_FILE_SIZE // (1024 * 1024),
         "allowed_extensions": sorted(list(ALLOWED_EXTENSIONS)),
         "chunk_duration_s": CHUNK_DURATION_S,
+        "chunk_overlap_s": CHUNK_OVERLAP_S,
+        "asr_quality": {
+            "target_sr": ASR_TARGET_SR,
+            "trim_top_db": ASR_TRIM_TOP_DB,
+            "live_min_confidence": ASR_LIVE_MIN_CONFIDENCE,
+            "live_min_rms": ASR_LIVE_MIN_RMS,
+            "vad_rms_threshold": VAD_RMS_THRESHOLD,
+            "vad_max_rms_threshold": VAD_MAX_RMS_THRESHOLD,
+            "vad_noise_multiplier": VAD_NOISE_MULTIPLIER,
+            "vad_pre_roll_seconds": VAD_PRE_ROLL_SECONDS,
+            "vad_silence_seconds": VAD_SILENCE_SECONDS,
+            "realtime_infer_window_seconds": REALTIME_INFER_WINDOW_SECONDS,
+            "commit_on_stability": COMMIT_ON_STABILITY,
+            "force_commit_seconds": FORCE_COMMIT_SECONDS,
+            "realtime_max_buffer_seconds": REALTIME_MAX_BUFFER_SECONDS,
+            "min_commit_words": MIN_COMMIT_WORDS,
+        },
     })
 
 
@@ -1609,7 +2160,9 @@ def api_upload():
             result['summary_error'] = None
             result['model'] = None
 
-            if auto_summarize and GEMINI_CLIENT_AVAILABLE and full_transcript:
+            if auto_summarize and not USE_GEMINI:
+                result['summary_error'] = 'gemini_disabled'
+            elif auto_summarize and GEMINI_CLIENT_AVAILABLE and full_transcript:
                 gemini_key = os.environ.get('GEMINI_API_KEY', '').strip()
                 if gemini_key:
                     try:
@@ -1621,6 +2174,7 @@ def api_upload():
                         )
                         result['summary'] = gem_result.get('summary')
                         result['model'] = gem_result.get('model')
+                        result['summary_prompt_version'] = gem_result.get('prompt_version')
                         logger.info("[Upload] Tóm tắt tự động thành công")
                     except PermissionError as _p:
                         result['summary_error'] = 'forbidden_403'
@@ -1677,6 +2231,17 @@ def api_summarize():
             }), 400
 
         # Kiểm tra gemini_client có sẵn không
+        if not USE_GEMINI:
+            return jsonify({
+                "success": False,
+                "transcript": text,
+                "summary": None,
+                "chunks_count": 0,
+                "model": None,
+                "summary_error": "gemini_disabled",
+                "error": "USE_GEMINI=false trong .env. Bat USE_GEMINI=true neu muon dung tom tat Gemini."
+            }), 503
+
         if not GEMINI_CLIENT_AVAILABLE or _gemini_summarize is None:
             return jsonify({
                 "success": False,
@@ -1713,6 +2278,7 @@ def api_summarize():
         summary = gem_result.get('summary', '')
         chunks_count = gem_result.get('chunks_count', 1)
         model_used = gem_result.get('model', '')
+        prompt_version = gem_result.get('prompt_version')
 
         logger.info(
             f"[Summarize] Thành công: chunks={chunks_count}, "
@@ -1724,6 +2290,7 @@ def api_summarize():
             "summary": summary,
             "chunks_count": chunks_count,
             "model": model_used,
+            "prompt_version": prompt_version,
             "summary_error": None,
             "mode": mode,
         })
@@ -1800,6 +2367,15 @@ def api_gemini_test():
     Trả về: success, model, response, error
     API key được đọc từ biến môi trường — KHÔNG lộ ra response.
     """
+    if not USE_GEMINI:
+        return jsonify({
+            "success": False,
+            "model": None,
+            "response": None,
+            "error": "USE_GEMINI=false trong .env. Bat USE_GEMINI=true neu muon test Gemini.",
+            "summary_error": "gemini_disabled"
+        }), 503
+
     if not GEMINI_CLIENT_AVAILABLE or _gemini_test is None:
         return jsonify({
             "success": False,
@@ -1916,6 +2492,12 @@ def api_pp_config_set():
         llm = data.get('llm')
 
         if pipeline:
+            if pipeline.get('use_llm'):
+                return jsonify({
+                    "success": False,
+                    "error": "LLM post-processing is disabled. Use /api/summarize for Gemini calls.",
+                    "error_code": "LLM_POST_PROCESS_DISABLED"
+                }), 400
             POST_PROCESSOR.config.setdefault('pipeline', {})
             POST_PROCESSOR.config['pipeline'].update(pipeline)
         if llm:
@@ -1970,7 +2552,14 @@ def api_post_process():
         if not text:
             return jsonify({'success': False, 'error': 'Không có văn bản'}), 400
             
-        result = POST_PROCESSOR.process(text, system_prompt=system_prompt)
+        if system_prompt:
+            return jsonify({
+                'success': False,
+                'error': 'LLM post-processing is disabled. Use /api/summarize for Gemini calls.',
+                'error_code': 'LLM_POST_PROCESS_DISABLED'
+            }), 400
+
+        result = POST_PROCESSOR.process(text)
         # Assuming result['processed'] is the final text
         # If the user script expects 'text', we should return 'text'
         return jsonify({"success": True, "text": result.get("processed", text)})

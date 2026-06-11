@@ -18,6 +18,35 @@ function supportsMediaDevices() {
     return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 }
 
+const PREFERRED_MIC_CONSTRAINTS = {
+    audio: {
+        channelCount: { ideal: 1 },
+        sampleRate: { ideal: 16000 },
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+    },
+    video: false
+};
+
+function resampleFloat32To16k(inputData, sourceRate) {
+    const targetRate = 16000;
+    if (!sourceRate || sourceRate === targetRate) {
+        return new Float32Array(inputData);
+    }
+    const ratio = sourceRate / targetRate;
+    const newLength = Math.max(1, Math.round(inputData.length / ratio));
+    const output = new Float32Array(newLength);
+    for (let i = 0; i < newLength; i++) {
+        const srcIndex = i * ratio;
+        const i0 = Math.floor(srcIndex);
+        const i1 = Math.min(i0 + 1, inputData.length - 1);
+        const frac = srcIndex - i0;
+        output[i] = inputData[i0] * (1 - frac) + inputData[i1] * frac;
+    }
+    return output;
+}
+
 function supportsSpeechRecognition() {
     return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 }
@@ -347,6 +376,8 @@ async function callSummarize(text, mode, sourceInfo, triggerBtn){
                     source: sourceInfo
                 });
             }
+        } else if(d.summary_error === 'gemini_disabled') {
+            if(b) b.innerHTML='<div style="color:var(--warning-color,#f59e0b)">&#9888; AI Assistant đang tắt. Bật <code>USE_GEMINI=true</code> trong file <code>.env</code> để dùng tóm tắt.</div>';
         } else if(d.summary_error === 'no_api_key') {
             if(b) b.innerHTML='<div style="color:var(--warning-color,#f59e0b)">&#9888; GEMINI_API_KEY chưa được cấu hình. Mở file <code>.env</code> và thêm API key.</div>';
         } else if(d.summary_error === 'rate_limit_429') {
@@ -424,6 +455,10 @@ class VietASRRecorder {
         this.profiler=null;
         this._profilerInterval=null;
         this.mediaStream=null;
+        this.audioCtx=null;
+        this.audioSource=null;
+        this.processorNode=null;
+        this.silentGain=null;
         /* FIX: Socket.IO connection for real-time text post-processing */
         this._socket=null;
         this._initSocket();
@@ -628,11 +663,11 @@ class VietASRRecorder {
     async start(){
         if(this.isRecording) return;
         
-        const mode = window._currentLiveMode || 'browser';
+        const mode = window._currentLiveMode || 'wav2vec2';
         if (mode === 'wav2vec2') {
             const modelStatus = $('scardModelVal') ? $('scardModelVal').textContent : '';
             if (modelStatus !== 'Sẵn sàng') {
-                showToast('Mô hình Wav2Vec2 chưa sẵn sàng. Vui lòng chờ model tải xong hoặc chọn Browser Live Mode.', 'warning');
+                showToast('Mô hình Wav2Vec2 chưa sẵn sàng. Vui lòng chờ model tải xong.', 'warning');
                 return;
             }
             await this.startLocalWav2VecMode();
@@ -677,7 +712,7 @@ class VietASRRecorder {
                 this._startSpeakerDetection();
             } else {
                 try{
-                    this.mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
+                    this.mediaStream=await navigator.mediaDevices.getUserMedia(PREFERRED_MIC_CONSTRAINTS);
                     initVisualizer(this.mediaStream);
                     this._startSpeakerDetection();
                 }catch(e){
@@ -703,7 +738,7 @@ class VietASRRecorder {
         
         try{
             if (!this.mediaStream) {
-                this.mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
+                this.mediaStream=await navigator.mediaDevices.getUserMedia(PREFERRED_MIC_CONSTRAINTS);
             }
             
             if (!this._socket || !this._socket.connected) {
@@ -726,15 +761,22 @@ class VietASRRecorder {
             this.audioCtx = new AudioContextClass({ sampleRate: 16000 });
             this.audioSource = this.audioCtx.createMediaStreamSource(this.mediaStream);
             this.processorNode = this.audioCtx.createScriptProcessor(4096, 1, 1);
+            this.silentGain = this.audioCtx.createGain();
+            this.silentGain.gain.value = 0;
             
             this.audioSource.connect(this.processorNode);
-            this.processorNode.connect(this.audioCtx.destination);
+            this.processorNode.connect(this.silentGain);
+            this.silentGain.connect(this.audioCtx.destination);
             
             this.processorNode.onaudioprocess = (e) => {
                 if (!this.isRecording || this.isPaused) return;
                 const inputData = e.inputBuffer.getChannelData(0);
                 if (this._socket && this._socket.connected) {
-                    this._socket.emit('audio_chunk', inputData.buffer);
+                    const pcm16k = resampleFloat32To16k(inputData, this.audioCtx.sampleRate);
+                    this._socket.emit('audio_chunk', pcm16k.buffer.slice(
+                        pcm16k.byteOffset,
+                        pcm16k.byteOffset + pcm16k.byteLength
+                    ));
                 }
             };
             
@@ -759,7 +801,7 @@ class VietASRRecorder {
         if(!this.isRecording) return;
         this.isPaused=!this.isPaused;
         const btn=$('pauseRecordBtn');
-        const mode = window._currentLiveMode || 'browser';
+        const mode = window._currentLiveMode || 'wav2vec2';
         
         if(this.isPaused){
             if (mode === 'browser') {
@@ -795,7 +837,7 @@ class VietASRRecorder {
     stop(){
         console.log("[ASR-State] Stop Recording");
         this.isRecording=false; this.isPaused=false;
-        const mode = window._currentLiveMode || 'browser';
+        const mode = window._currentLiveMode || 'wav2vec2';
         
         if (mode === 'browser') {
             /* FIX: Clear restart flag and timeout before stopping to prevent ghost restart */
@@ -818,6 +860,10 @@ class VietASRRecorder {
             if (this.audioSource) {
                 this.audioSource.disconnect();
                 this.audioSource = null;
+            }
+            if (this.silentGain) {
+                this.silentGain.disconnect();
+                this.silentGain = null;
             }
             if (this.audioCtx) {
                 this.audioCtx.close();
@@ -931,7 +977,8 @@ async function handleFileUpload(file) {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('ground_truth', ($('groundTruthInput')||{}).value||'');
-    formData.append('enable_diarization', ($('enableDiarization')||{}).checked?'true':'false');
+    const diarToggle = $('enableDiarization');
+    formData.append('enable_diarization', (diarToggle && !diarToggle.disabled && diarToggle.checked)?'true':'false');
     formData.append('min_speakers', ($('minSpeakersSelect')||{}).value||'2');
     formData.append('max_speakers', ($('maxSpeakersSelect')||{}).value||'4');
 
@@ -1332,13 +1379,13 @@ document.addEventListener('DOMContentLoaded',()=>{
         if(recorder.isRecording) return;
         setGeminiButtonState('recording');
         
-        const mode = window._currentLiveMode || 'browser';
+        const mode = window._currentLiveMode || 'wav2vec2';
         console.log("[StartClick] Mode:", mode);
         
         if (mode === 'browser') {
             if(window.SpeakerProfiler && supportsMediaDevices()){
                 try{
-                    recorder.mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
+                    recorder.mediaStream=await navigator.mediaDevices.getUserMedia(PREFERRED_MIC_CONSTRAINTS);
                     $('speakerWizard').hidden=false;
                 } catch(e){
                     console.warn('[StartButton] Optional media stream failed for speaker wizard:', e);
@@ -1355,7 +1402,7 @@ document.addEventListener('DOMContentLoaded',()=>{
             }
             if(window.SpeakerProfiler){
                 try{
-                    recorder.mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
+                    recorder.mediaStream=await navigator.mediaDevices.getUserMedia(PREFERRED_MIC_CONSTRAINTS);
                     $('speakerWizard').hidden=false;
                 } catch(e){
                     console.error('[StartButton] Failed to get microphone for local mode:', e);
@@ -1479,7 +1526,7 @@ function initStatusCards(){
     setScardStatus('scardServer', 'Đang kết nối...', 'idle', '');
     setScardStatus('scardGemini', 'Đang kiểm tra...', 'idle', 'scardGeminiDot');
     // Set live mode from localStorage preference
-    const savedMode = localStorage.getItem('vietasr-live-mode') || 'browser';
+    const savedMode = 'wav2vec2';
     updateLiveModeScard(savedMode);
 }
 
@@ -1510,12 +1557,23 @@ async function loadServerConfig(){
         if($('scardDeviceVal')) $('scardDeviceVal').textContent=dev.toUpperCase();
         if($('gpuBadgeText')) $('gpuBadgeText').textContent=dev.toUpperCase();
         // Default live mode from server
-        const srvMode=d.default_live_mode||'browser';
-        const userMode=localStorage.getItem('vietasr-live-mode')||srvMode;
+        const srvMode=d.default_live_mode||'wav2vec2';
+        const userMode=srvMode === 'browser' ? 'wav2vec2' : 'wav2vec2';
         applyLiveMode(userMode, false);
         // Default live mode select in settings
         const dlms=$('defaultLiveModeSelect');
         if(dlms) dlms.value=userMode;
+        const diarToggle=$('enableDiarization');
+        const diarRange=$('speakerRangeControls');
+        if(diarToggle && !d.diarization_available){
+            diarToggle.checked=false;
+            diarToggle.disabled=true;
+            diarToggle.title='Nhận diện người nói đang tắt vì backend diarization chưa khả dụng.';
+        }
+        if(diarRange && !d.diarization_available){
+            diarRange.style.opacity='0.35';
+            diarRange.style.pointerEvents='none';
+        }
     }catch(e){
         console.error('Failed to load server config:', e);
         setScardStatus('scardServer','Offline / Lỗi','err','scardServerDot');
@@ -1549,7 +1607,7 @@ async function checkGeminiStatus(){
 }
 
 function updateLiveModeScard(mode){
-    const lv=mode==='browser'?'Browser Live':'Wav2Vec2';
+    const lv='Wav2Vec2';
     setScardStatus('scardLiveMode', lv, 'ok', 'scardLiveModeDot');
     if($('scardLiveModeVal')) $('scardLiveModeVal').textContent=lv;
 }
@@ -1558,7 +1616,6 @@ function updateLiveModeScard(mode){
 // ===================== UPGRADE 2025: LIVE MODE SELECTOR =====================
 
 const MODE_DESCRIPTIONS={
-    browser:'🌐 <strong>Browser Live Mode</strong> — Nhận dạng nhanh, thời gian thực qua Web Speech API. Phù hợp demo trực tiếp.',
     wav2vec2:'🤖 <strong>Local Wav2Vec2 Mode</strong> — Chậm hơn khi chạy CPU, dùng để minh họa mô hình nghiên cứu.'
 };
 
@@ -1568,10 +1625,11 @@ function initLiveModeSelector(){
     if(!browserBtn||!wav2vecBtn) return;
 
     // Restore saved preference
-    const saved=localStorage.getItem('vietasr-live-mode')||'browser';
+    const saved='wav2vec2';
     applyLiveMode(saved, false);
 
-    browserBtn.onclick=()=>applyLiveMode('browser', true);
+    browserBtn.hidden=true;
+    browserBtn.onclick=()=>applyLiveMode('wav2vec2', true);
     wav2vecBtn.onclick=()=>applyLiveMode('wav2vec2', true);
 
     // Settings page default live mode select
@@ -1583,6 +1641,7 @@ function initLiveModeSelector(){
 }
 
 function applyLiveMode(mode, save){
+    mode='wav2vec2';
     const browserBtn=$('modeBrowserBtn');
     const wav2vecBtn=$('modeWav2VecBtn');
     const descEl=$('modeDescText');
@@ -1590,9 +1649,9 @@ function applyLiveMode(mode, save){
 
     if(browserBtn) browserBtn.classList.toggle('active', mode==='browser');
     if(wav2vecBtn) wav2vecBtn.classList.toggle('active', mode==='wav2vec2');
-    if(descEl) descEl.innerHTML=MODE_DESCRIPTIONS[mode]||MODE_DESCRIPTIONS.browser;
+    if(descEl) descEl.innerHTML=MODE_DESCRIPTIONS.wav2vec2;
     if(engineBadge){
-        engineBadge.textContent=mode==='browser'?'🌐 Browser · vi-VN':'🤖 Wav2Vec2 · Local';
+        engineBadge.textContent='🤖 Wav2Vec2 · Local';
     }
     updateLiveModeScard(mode);
 
@@ -1696,6 +1755,7 @@ async function callSummarizeInline(text, mode, context, areaId, bodyId, modelBad
             showToast('Tóm tắt thành công','success');
         } else {
             const errMap={
+                'gemini_disabled':'AI Assistant đang tắt. Bật USE_GEMINI=true trong file .env để dùng tóm tắt.',
                 'no_api_key':'⚠ GEMINI_API_KEY chưa được cấu hình trong .env',
                 'rate_limit_429':'⏳ AI Assistant API đang quá tải (429). Vui lòng thử lại sau.',
                 'forbidden_403':'🚫 API key bị từ chối (403). Kiểm tra lại GEMINI_API_KEY trong file .env.',

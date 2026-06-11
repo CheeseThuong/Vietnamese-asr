@@ -38,6 +38,7 @@ except ImportError:
     pass  # python-dotenv không bắt buộc, dùng env system
 
 logger = logging.getLogger("VietASR.GeminiClient")
+SUMMARY_PROMPT_VERSION = "contextual_story_v2"
 
 # ======================================================================
 # Cấu hình toàn cục — đọc từ biến môi trường
@@ -391,8 +392,20 @@ def summarize_transcript(
     # Bảng prompt theo chế độ (bằng tiếng Việt)
     chunk_prompts = {
         "summary": (
-            "Tóm tắt ngắn gọn đoạn văn bản nhận dạng giọng nói (ASR) tiếng Việt sau đây. "
-            "Chỉ giữ lại thông tin quan trọng nhất, bằng tiếng Việt:"
+            "Bạn là biên tập viên tóm tắt transcript ASR tiếng Việt. Transcript có thể sai chính tả, thiếu dấu, "
+            "lặp từ hoặc bị nhận diện nhầm, vì vậy hãy suy luận thận trọng theo ngữ cảnh thay vì chép nguyên văn.\n"
+            "Nhiệm vụ: tạo bản tóm tắt có ngữ cảnh, không chỉ liệt kê câu nói.\n"
+            "Bắt buộc giữ các mục sau nếu suy ra được từ transcript:\n"
+            "1. Chủ đề/bối cảnh chính của đoạn ghi âm.\n"
+            "2. Thời gian và không gian xảy ra sự việc; nếu không rõ, ghi 'không rõ'.\n"
+            "3. Người nói/nhân vật/lực lượng liên quan và vai trò của họ; nếu transcript không nêu rõ người nói, "
+            "phân biệt 'người kể/giọng đọc' với 'nhân vật trong nội dung'.\n"
+            "4. Diễn biến chính theo trình tự nguyên nhân -> hành động -> cao trào.\n"
+            "5. Kết quả/kết luận của câu chuyện hoặc tình huống. Không được bỏ mục này; nếu đoạn transcript chưa có kết quả, "
+            "ghi rõ 'chưa thấy kết quả trong đoạn cung cấp'.\n"
+            "6. Các điểm không chắc do ASR lỗi hoặc thiếu ngữ cảnh.\n"
+            "Không bịa tên, thời gian, địa điểm hoặc kết quả không có căn cứ. Không trích nguyên văn dài từ transcript. "
+            "Viết bằng tiếng Việt tự nhiên, mạch lạc."
         ),
         "meeting": (
             "Tóm tắt các điểm chính từ đoạn biên bản cuộc họp (ASR) tiếng Việt sau. "
@@ -411,8 +424,17 @@ def summarize_transcript(
     # Prompt tổng hợp (khi có nhiều chunks)
     final_prompts = {
         "summary": (
-            "Dựa trên các bản tóm tắt từng phần dưới đây của một cuộc ghi âm tiếng Việt, "
-            "hãy tạo một bản tóm tắt tổng hợp duy nhất, mạch lạc, đầy đủ thông tin chính, bằng tiếng Việt:"
+            "Dựa trên các bản tóm tắt từng phần của một transcript ASR tiếng Việt, hãy tổng hợp thành một bản "
+            "tóm tắt cuối cùng có ngữ cảnh. Không chỉ ghép bullet từ các phần.\n"
+            "Bắt buộc trình bày theo cấu trúc:\n"
+            "- Bối cảnh/chủ đề\n"
+            "- Thời gian, không gian\n"
+            "- Người nói/nhân vật và vai trò\n"
+            "- Diễn biến chính\n"
+            "- Kết quả/kết luận\n"
+            "- Điểm chưa chắc hoặc thiếu dữ kiện\n"
+            "Ưu tiên kết quả cuối cùng của câu chuyện/tình huống. Nếu các phần chỉ có kế hoạch và diễn biến mà chưa có kết quả, "
+            "ghi rõ là chưa thấy kết quả trong dữ liệu. Sửa lỗi ASR ở mức hợp lý nhưng không bịa thêm chi tiết."
         ),
         "meeting": (
             "Dựa trên các ghi chú tóm tắt từng phần dưới đây, "
@@ -454,6 +476,7 @@ def summarize_transcript(
             "summary": summary,
             "chunks_count": 1,
             "model": chosen_model,
+            "prompt_version": SUMMARY_PROMPT_VERSION,
         }
 
     # Nhiều chunks: tóm tắt từng chunk, rồi tổng hợp
@@ -486,6 +509,7 @@ def summarize_transcript(
             "summary": chunk_summaries[0],
             "chunks_count": chunks_count,
             "model": chosen_model,
+            "prompt_version": SUMMARY_PROMPT_VERSION,
         }
 
     # Tổng hợp các bản tóm tắt chunk thành 1 bản cuối
@@ -506,6 +530,7 @@ def summarize_transcript(
         "summary": final_summary or combined_text,
         "chunks_count": chunks_count,
         "model": chosen_model,
+        "prompt_version": SUMMARY_PROMPT_VERSION,
     }
 
 
